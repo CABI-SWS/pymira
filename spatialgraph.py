@@ -13,8 +13,8 @@ import numpy as np
 arr = np.asarray
 import os
 from tqdm import tqdm, trange # progress bar
-import matplotlib as mpl
-from matplotlib import pyplot as plt
+#import matplotlib as mpl
+#from matplotlib import pyplot as plt
 
 def update_array_index(vals,inds,keep):
     # Updates/offets indices for an array (vals) to exclude values in a flag array (keep)
