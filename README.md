@@ -57,5 +57,5 @@ Contributions are welcome! Please submit issues or pull requests. See [CONTRIBUT
 
 ## License
 
-\[MIT Lice
+[MIT License](LICENSE)
 
