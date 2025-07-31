@@ -177,7 +177,44 @@ def split_artery_vein(graph,gfile=None,capillaries=False):
 class SpatialGraph(amiramesh.AmiraMesh):
 
     """
-    Spatial graph class
+    SpatialGraph: Core class for representing, analysing, and editing spatial graphs in 3D.
+
+    The SpatialGraph class is the central data structure in pymira for working with spatially embedded graphs—
+    such as vascular networks, neural circuits, or any system where nodes and edges have 3D coordinates.
+
+    **Key Features:**
+      - Loads spatial graph data from AmiraMesh, custom, or other supported formats.
+      - Stores nodes, edges, edge points, and associated attributes as Numpy arrays for fast access.
+      - Supports a wide range of graph analysis and manipulation methods:
+          * Degree and connectivity analysis
+          * Shortest paths, clusters, and component detection
+          * Geometric and topological measurements (length, branching, tortuosity, etc.)
+          * Skeletonisation, pruning, and graph editing
+      - Can read and write annotated or attributed graphs for use in quantitative biology and network science.
+      - Provides integration with visualisation routines for 2D/3D graph display and publication-quality figures.
+
+    **Usage:**
+    Instantiate, load a graph, and perform analyses or modifications.
+
+    Example:
+        from pymira import spatialgraph
+        g = spatialgraph.SpatialGraph()
+        g.read('vessel_network.am')
+        print(g.num_nodes(), g.num_edges())
+        metrics = g.compute_statistics()
+        g.plot()
+
+    **Applications:**
+      - Vascular and neural network quantification
+      - Automated feature extraction in bioimaging
+      - 3D network comparison and registration
+
+    Attributes:
+        nodes (ndarray): Node coordinates (N, 3)
+        edges (ndarray): Edge connectivity (E, 2)
+        edge_points (ndarray): Edge spline/sampled coordinates (P, 3)
+        scalars (list): Per-node or per-edge attributes
+        ... (see API for more)
     """
     
     def __init__(self,header_from=None,initialise=False,scalars=[],node_scalars=[],path=None):
@@ -3904,9 +3941,36 @@ class Edge(object):
         if not self.complete:
             print('Incomplete...')
             
-# Create a leight-weight object to pass graph variables around with
-# Useful for editing!
+
 class GVars(object):
+
+    """
+    GVars: Low-level, efficient workspace for spatial graph data.
+
+    Provides direct Numpy array access to a SpatialGraph's core data:
+      - Node coordinates
+      - Edge connectivity
+      - Edge point coordinates
+      - Per-edge node counts
+      - Scalar attribute arrays
+
+    Tracks allocation and usage via pointers and boolean arrays, and
+    enables high-performance, batch editing or algorithmic manipulation
+    of spatial graphs.
+
+    Typically used as a temporary workspace during advanced analysis,
+    editing, or conversion routines that need to operate directly on
+    arrays for speed and memory efficiency.
+
+    Parameters
+    ----------
+    graph : SpatialGraph
+        The parent spatial graph object whose data will be copied in.
+    n_all : int, optional
+        Preallocation batch size for anticipated edits (default=500).
+    """
+
+
     def __init__(self,graph,n_all=500):
         self.node_ptr = 0
         self.edge_ptr = 0
