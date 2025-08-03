@@ -38,28 +38,14 @@ class TubePlot(object):
         
         # Minimum vessel radius to plot (scalar)
         self.min_radius = min_radius
-        # Domain
-        self.domain = domain
-        self.domain_type = domain_type
-        self.ignore_domain = ignore_domain
-        # Size of area to plot
-        self.domain_radius = domain_radius
         # Factor to scale vessel radii by
         self.radius_scale = radius_scale
         self.fixed_radius = fixed_radius
-        # Centre of plot domain
-        self.domain_centre = None
-        if domain_centre is None:
-            if self.domain is not None:
-                self.domain_centre = (self.domain[:,1]+self.domain[:,0])/2.
-        else:
-            self.domain_centre = domain_centre
-        #self.domain_radius = None
-        if domain_radius is None: # Use size of first domain
-            if self.domain is not None:
-                self.domain_radius = (self.domain[0,1]-self.domain[0,0])/2.
-        else:
-            self.domain_radius = domain_radius
+        
+        # Domain
+        self.ignore_domain = ignore_domain
+        self.set_domain(domain,domain_type,centre=domain_centre,radius=domain_radius)
+        
         # Cylinder resolution based on radius (boolean)
         self.radius_based_resolution = radius_based_resolution
         # Cylinder resolution (scalar)
@@ -128,6 +114,25 @@ class TubePlot(object):
         if self.block:
             self._show_plot()
             
+    def set_domain(self,domain,domain_type,centre=None,radius=None):
+    
+        if domain is None:
+            self.domain = self.graph.get_domain()
+        else:
+            self.domain = domain
+        self.domain_type = domain_type
+
+        # Centre of plot domain
+        self.domain_centre = centre
+        if self.domain_centre is None:
+            if self.domain is not None:
+                self.domain_centre = (self.domain[:,1]+self.domain[:,0])/2.
+        
+        # Size of area to plot (only used for certain domain types)
+        self.domain_radius = radius
+        if self.domain_radius is None: # Use size of first dimension
+            if self.domain is not None:
+                self.domain_radius = (self.domain[0,1]-self.domain[0,0])/2.
             
     def find_domain_intersection(self,start_coord,end_coord,epsilon=1e-6):
         # Find which face segment intersects
@@ -148,7 +153,9 @@ class TubePlot(object):
                 dir = end_coord - start_coord
                 coll,pt = geometry.line_plane_intersection(pnt,pn[i],end_coord,dir)
                 # See if intersection point is inside the domain
-                if pt is not None and self.inside_domain(pt):
+                if pt is not None:
+                    #inside,intersec = self.inside_domain(pt)
+                    #if inside:
                     intersection[i,:] = pt
             # Find closest intersection that is on the surface of the cubic domain
             if np.all(~np.isfinite(intersection)):
@@ -173,7 +180,8 @@ class TubePlot(object):
                 dir = end_coord - start_coord
                 coll,pt = geometry.line_plane_intersection(pnt,pn[i],end_coord,dir)
                 # See if intersection point is inside the domain
-                if pt is not None and self.inside_domain(pt):
+                #inside,intersec = self.inside_domain(pt)
+                if pt is not None: # and inside:
                     intersection[i,:] = pt
             # Find closest intersection that is on the surface of the cubic domain
             if np.all(~np.isfinite(intersection)):
@@ -181,44 +189,87 @@ class TubePlot(object):
             face = np.nanargmin([norm(x-end_coord) for x in intersection])
             coord = intersection[face,:]
             return coord 
+        elif self.domain_type=='cylinder':
+            i0 = np.linalg.norm(start_coord[:2]-self.domain_centre[:2])<=self.domain_radius
+            i1 = np.linalg.norm(end_coord[:2]-self.domain_centre[:2])<=self.domain_radius
+            if (i0==False and i1==False) or (i0==True and i1==True):
+                return None
+            d = end_coord[:2] - start_coord[:2]
+            f = start_coord[:2] - self.domain_centre[:2]
+            a = np.dot(d, d)
+            b = 2 * np.dot(f, d)
+            c = np.dot(f, f) - self.domain_radius**2
+            
+            discriminant = b**2 - 4*a*c
+            intersection_points = []
+
+            tol = 1e-12
+            if discriminant < -tol:
+                # No intersection
+                return None
+
+            elif np.abs(discriminant) < tol:
+                # Tangent: one intersection
+                t = -b / (2*a)
+                if 0 <= t <= 1:
+                    intersection_points.append(start_coord[:2] + t*d)
+            else:
+                # Two intersections
+                sqrt_discriminant = np.sqrt(discriminant)
+                t1 = (-b + sqrt_discriminant) / (2*a)
+                t2 = (-b - sqrt_discriminant) / (2*a)
+                for t in [t1, t2]:
+                    if 0 <= t <= 1:
+                        intersection_points.append(start_coord[:2] + t*d)
+
+            if len(intersection_points)==0:
+                intersection_points = None
+            else:
+                intersection_points = arr(intersection_points).flatten()
+            return intersection_points
         else:  
             return None                   
             
     def inside_domain(self,coord,start_coord=None,epsilon=1e-6,**kwargs):
     
+        """
+        Checks whether a coordinate is inside the prescribed domain
+        If a start coordinate is provided, it also checks whether the line segment connecting the two coordinates
+        intersects with the domain boundary and, if so, returns its location (or otherwise None)
+        Returns: coordinate inside domain (bool), intersection coordinate
+        """
+    
         if self.ignore_domain:
             return True, None
 
-        #if self.domain is None:
-        #    return True, None
         # Cuboid domain
+        inside = False
         if self.domain_type=='cuboid' and self.domain is not None:
             if np.all(self.domain[:,0]<=coord) and np.all(self.domain[:,1]>=coord):
-                return True, None
-            elif start_coord is not None:
+                inside = True
+            if start_coord is not None:
                 dom_int = self.find_domain_intersection(start_coord,coord)
-                return False, dom_int
+                return inside, dom_int
             else:
-                return False, None
+                return inside, None
         elif self.domain_type=='rectangle' and self.domain is not None:
             if np.all(self.domain[:2,0]<=coord[:2]) and np.all(self.domain[:2,1]>=coord[:2]):
-                return True, None
-            elif start_coord is not None:
+                inside = True
+            if start_coord is not None:
                 dom_int = self.find_domain_intersection(start_coord,coord)
-                return False, dom_int
+                return inside, dom_int
             else:
-                return False, None
+                return inside, None
         elif self.domain_type=='cylinder':
             if self.domain_centre is None or self.domain_radius is None:
-                return True, None
-            in0 = np.linalg.norm(start_coord-self.domain_centre)<=self.domain_radius
-            in1 = np.linalg.norm(coord-self.domain_centre)<=self.domain_radius
-            if not in0 and not in1:
-                return False, None
-            elif in0 and in1:
-                return True, None
+                inside = True
+            elif np.linalg.norm(coord-self.domain_centre)<=self.domain_radius:
+                inside = True
+            if start_coord is not None:
+                dom_int = self.find_domain_intersection(start_coord,coord)
+                return inside, dom_int
             else:
-                return False, None #self.find_domain_intersection(start_coord,coord)
+                return inside, None
         elif self.domain_type=='surface':
             # Assumes a plane oriented in x-y
             if np.all(self.domain[0:2,0]<=coord[0:2]) and np.all(self.domain[0:2,1]>=coord[0:2]):
@@ -358,6 +409,20 @@ class TubePlot(object):
             self.additional_meshes += torus
         self.update()
         
+    def add_cube(self,centre=arr([0.,0.,0.]),color=arr([1.,1.,1.]),**kwargs):
+        if self.headless:
+            return
+        cube = o3d.geometry.TriangleMesh.create_box(**kwargs) # width, height, depth
+        # Simple translation (TODO: Add rotation, etc.)
+        cube = cube.translate(centre, relative=False)
+        cube.paint_uniform_color(color)
+        if self.additional_meshes is None:
+            self.additional_meshes = cube
+            self.vis.add_geometry(self.additional_meshes)
+        else:
+            self.additional_meshes += cube
+        self.update()
+        
     def add_sphere(self,centre=arr([0.,0.,0.]),color=arr([1.,1.,1.]),**kwargs):
         # kwargs: radius, resolution
         if self.headless:
@@ -467,6 +532,9 @@ class TubePlot(object):
                             height = np.linalg.norm(x1-x0)
                             
                             inside,intersection = self.inside_domain(x0,start_coord=x1)
+                            if inside and intersection is not None:
+                                #breakpoint()
+                                x1 = intersection
                             if height>0. and np.isfinite(height) and inside: # (self.domain_radius is None or (np.linalg.norm(x0-self.domain_centre<=self.domain_radius) and np.linalg.norm(x1-self.domain_centre<=self.domain_radius))):
                                 vec = vec / height
                                 if rads[j]<20. and self.radius_based_resolution:
