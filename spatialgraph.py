@@ -1316,11 +1316,12 @@ class SpatialGraph(amiramesh.AmiraMesh):
     def check_artery_vein_classification(self):
         # Check artery/vein classification
         # Assumes two seperate graphs, one for arteries (=0) one for veins (=1)
-        gr = self.identify_graphs()
+        gr,cnt = self.identify_graphs()
         # Check that there are only two graphs
         ugr = np.unique(gr)
         if not np.all(np.in1d(ugr,[1,2])):
             return -3
+
         # Check that veins and arteries are in separate graphs
         vtn = self.point_scalars_to_node_scalars(name='VesselType')
         chk_a = np.all(gr[vtn==0]==gr[vtn==0][0])
@@ -1334,13 +1335,14 @@ class SpatialGraph(amiramesh.AmiraMesh):
     def remove_subsidiary_graphs(self):
         # Removes all but the largest arterial graph and the largest venous graph
         
+        #breakpoint()
         vtn = self.point_scalars_to_node_scalars(name='VesselType')
         nvt = np.unique(vtn)
         
-        gr = self.identify_graphs()
+        gr,cnt = self.identify_graphs()
         # Check that there are only two graphs
-        ugr,cnt = np.unique(gr,return_counts=True)
-        if len(ugr)<=2:
+        ugr = np.unique(gr)
+        if len(cnt)<=2:
             return
         
         gr_type = arr([vtn[gr==u][0] for u in ugr])
@@ -1725,7 +1727,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
                         
         return scalar_nodes
         
-    def point_scalars_to_node_scalars(self,mode='max',name=None,func=np.nanmax):
+    def point_scalars_to_node_scalars(self,mode='max',name=None,func=['max']):
     
         if False: #type(name) is str and mode=='max':
             data = self.get_data(name)
@@ -1772,15 +1774,29 @@ class SpatialGraph(amiramesh.AmiraMesh):
         counts = np.bincount(epi, minlength=self.nedge)
         means = np.divide(sums, counts, where=counts!=0)
         conns = self.get_data('EdgeConnectivity')           
+        npi0 = np.repeat(conns[:,0],npts)
+        npi1 = np.repeat(conns[:,1],npts)
+        node_ids = np.linspace(0,self.nnode-1,self.nnode,dtype='int')
+        counts0 = np.bincount(npi0, minlength=self.nnode)
+        counts1 = np.bincount(npi1, minlength=self.nnode)
         
-        # Flatten edges to a list of all connected nodes and the corresponding edge means
-        nodes = conns.flatten()           # shape (2*nedge,)
-        edge_means_repeated = np.repeat(means, 2)  # (mean for each edge, for both its nodes)
-
-        # Aggregate means for each node
-        node_sum = np.bincount(nodes, weights=edge_means_repeated, minlength=self.nnode)
-        node_count = np.bincount(nodes, minlength=self.nnode)
-        node_mean = np.divide(node_sum, node_count, where=node_count != 0)
+        mins = np.full(self.nnode,np.inf)
+        np.minimum.at(mins,npi0,data)
+        np.minimum.at(mins,npi1,data)
+        maxs = np.full(self.nnode,-np.inf)
+        np.maximum.at(maxs,npi0,data)
+        np.maximum.at(maxs,npi1,data)
+        
+        #breakpoint()
+        
+        if len(func)==1 and func[0]=='max':
+            return maxs
+        elif len(func)==1 and func[0]=='min':
+            return mins
+        elif len(func)==2:
+            return mins,maxs
+        else:
+            breakpoint()
 
         # Optionally, apply func
         if callable(func):
@@ -2029,7 +2045,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
         
         self.set_data(radius,name=rad_field_name)
         
-    def identify_graphs(self):
+    def identify_graphsHOLD(self):
     
         graphInd = np.zeros(self.nnode,dtype='int')
         curGraph = 1
