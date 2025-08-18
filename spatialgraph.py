@@ -1334,8 +1334,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
         
     def remove_subsidiary_graphs(self):
         # Removes all but the largest arterial graph and the largest venous graph
-        
-        #breakpoint()
+
         vtn = self.point_scalars_to_node_scalars(name='VesselType')
         nvt = np.unique(vtn)
         
@@ -1348,10 +1347,10 @@ class SpatialGraph(amiramesh.AmiraMesh):
         gr_type = arr([vtn[gr==u][0] for u in ugr])
         
         cnt_a = cnt.copy()
-        cnt_a[gr_type!=0] = 0
+        cnt_a[gr_type!=0] = -1
         a_keep = ugr[np.nanargmax(cnt_a)]
         cnt_v = cnt.copy()
-        cnt_v[gr_type!=1] = 0
+        cnt_v[gr_type!=1] = -1
         v_keep = ugr[np.nanargmax(cnt_v)]
 
         keep_node = np.zeros(self.nnode,dtype='bool')
@@ -1544,6 +1543,10 @@ class SpatialGraph(amiramesh.AmiraMesh):
         self.set_data(rads,name=self.get_radius_field_name())
                     
     def identify_graphs(self,progBar=False,ignore_node=None,ignore_edge=None,verbose=False,add_scalar=True):
+
+        """
+        Label nodes according to which isolated spatial graph they occupy
+        """
 
         # NEW VERSION (faster)!
         # Find all connected nodes
@@ -2411,7 +2414,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
         
         return new_coords
      
-    def move_node(self,nodeIndex,coords=None,displacement=None):
+    def move_node(self,nodeIndex,coords=None,displacement=None,plot=False):
     
         """
         Move nodeIndex to coords and translate any connected edge
@@ -2422,12 +2425,15 @@ class SpatialGraph(amiramesh.AmiraMesh):
         conn_edges = self.get_edges_containing_node(nodeIndex)
         old_coords = nodes[nodeIndex]
         
+        if coords is not None:
+            new_coords = coords.copy()
+        
         for ei in conn_edges:
             e = self.get_edge(ei)
             
             new_coords = self._translate_edge_coords(nodeIndex,e,coords=coords,displacement=displacement)
             
-            if False:
+            if plot:
                 plt.ion()
                 plt.scatter(e.coordinates[:,0],e.coordinates[:,1],c='b')
                 plt.scatter(coords[0],coords[1],c='g')
@@ -2435,7 +2441,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
                     plt.scatter(e.coordinates[0,0],e.coordinates[0,1],c='r')
                 elif e.end_node_index==nodeIndex:
                     plt.scatter(e.coordinates[-1,0],e.coordinates[-1,1],c='r')
-                plt.scatter(new_points[:,0],new_points[:,1],c='orange')
+                plt.scatter(new_coords[:,0],new_coords[:,1],c='orange')
 
         nodes[nodeIndex] = new_coords
 
