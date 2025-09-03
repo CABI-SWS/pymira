@@ -190,10 +190,10 @@ class TubePlot(object):
 
         # Cuboid domain
         if self.domain_type=='cuboid' and self.domain is not None:
-            return np.all(self.domain[:,0]<=coord) and np.all(self.domain[:,1]>=coord):
+            return np.all(self.domain[:,0]<=coord) and np.all(self.domain[:,1]>=coord)
             
         elif self.domain_type=='rectangle' and self.domain is not None:
-            return np.all(self.domain[:2,0]<=coord[:2]) and np.all(self.domain[:2,1]>=coord[:2]):
+            return np.all(self.domain[:2,0]<=coord[:2]) and np.all(self.domain[:2,1]>=coord[:2])
             
         elif self.domain_type=='cylinder':
             if self.domain_centre is None or self.domain_radius is None:
@@ -202,7 +202,7 @@ class TubePlot(object):
 
         elif self.domain_type=='surface':
             # Assumes a plane oriented in x-y
-            return np.all(self.domain[0:2,0]<=coord[0:2]) and np.all(self.domain[0:2,1]>=coord[0:2]):
+            return np.all(self.domain[0:2,0]<=coord[0:2]) and np.all(self.domain[0:2,1]>=coord[0:2])
 
         elif self.domain_type=='sphere':
             # TODO: Implement sphere collision detection
@@ -447,15 +447,16 @@ class TubePlot(object):
                     for j in range(1,coords.shape[0]):
                         if rads[j]>=self.min_radius:
                             x0,x1 = coords[j-1],coords[j]
-                            vec = x1-x0
-                            height = np.linalg.norm(x1-x0)
-                            
+
                             inside,intersection = self.segment_inside_domain(x0,x1)
-                            #if inside[0]==False and intersection is not None:
-                            #    breakpoint()
                             if inside[0]==True and inside[1]==False and intersection is not None:
                                 x1 = intersection
-                            if height>0. and np.isfinite(height) and inside[1]: # (self.domain_radius is None or (np.linalg.norm(x0-self.domain_centre<=self.domain_radius) and np.linalg.norm(x1-self.domain_centre<=self.domain_radius))):
+                            if inside[1]==True and inside[0]==False and intersection is not None:
+                                x0 = intersection
+                            height = np.linalg.norm(x1-x0)
+                            vec = x1-x0
+                            
+                            if height>0. and np.isfinite(height) and (inside[0] or inside[1]): # (self.domain_radius is None or (np.linalg.norm(x0-self.domain_centre<=self.domain_radius) and np.linalg.norm(x1-self.domain_centre<=self.domain_radius))):
                                 vec = vec / height
                                 if rads[j]<20. and self.radius_based_resolution:
                                     resolution = 4

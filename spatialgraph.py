@@ -2313,7 +2313,8 @@ class SpatialGraph(amiramesh.AmiraMesh):
                 dist1 = np.linalg.norm(e.start_node_coords-new_coords)
                 translated_points = e.coordinates - e.coordinates[0]
             if np.any(np.isfinite(translated_points)==False):
-                breakpoint()
+                #breakpoint()
+                return
             
             scale_factor = dist1 / dist0
                 
