@@ -190,7 +190,7 @@ class TubePlot(object):
 
         # Cuboid domain
         if self.domain_type=='cuboid' and self.domain is not None:
-            return np.all(self.domain[:,0]<=coord) and np.all(self.domain[:,1]>=coord):
+            return np.all(self.domain[:,0]<=coord) and np.all(self.domain[:,1]>=coord)
             
         elif self.domain_type=='rectangle' and self.domain is not None:
             return np.all(self.domain[:2,0]<=coord[:2]) and np.all(self.domain[:2,1]>=coord[:2]):
