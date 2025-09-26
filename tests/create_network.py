@@ -32,12 +32,13 @@ def segment():
     return nodes, connectivity, edgeradii, vessel_type
     
 
-def bifurcation():
+def bifurcation(l=100.,r=30.,a=30.):
 
+    ar = np.deg2rad(a)
     nodes = [[0,0,0],
-             [100,0,0],
-             [200.,100,0],
-             [200.,-100.,0],
+             [l,0,0],
+             [l*np.cos(ar),l*np.sin(ar),0],
+             [l*np.cos(ar),-l*np.sin(ar),0],
             ]
             
     connectivity = [[0,1],
@@ -51,12 +52,12 @@ def bifurcation():
                    0,
                    ]                    
                     
-    edgeradii = [ 30.,
-                  20.,
-                  20.,
+    edgeradii = [ r,
+                  r*0.8,
+                  r*0.8,
                  ] 
                 
-    return nodes, connectivity, edgeradii, vessel_type
+    return arr(nodes), arr(connectivity), arr(edgeradii), arr(vessel_type)
     
 def double_bifurcation():
 
@@ -278,64 +279,87 @@ def kidney_cco_simple():
     edgeradii = [ 20.,
                  ] 
     return nodes, connectivity, edgeradii, vessel_type    
-    
-#nodes, connectivity, edgeradii, vessel_type = double_bifurcation_reconnected()
-#nodes, connectivity, edgeradii, vessel_type = bifurcation()
-#nodes, connectivity, edgeradii, vessel_type = segment()
-nodes, connectivity, edgeradii, vessel_type = kidney_cco()
-#nodes, connectivity, edgeradii, vessel_type = kidney_cco_simple()
 
-nodes = arr(nodes)
-#nodes[:,0] -= 250
-#nodes = -nodes
-                
-edgepoints,nedgepoints,radii,category = [],[],[],[]
-for i,conn in enumerate(connectivity):
-    edgepoints.append(nodes[conn[0]])
-    edgepoints.append(nodes[conn[1]])
-    nedgepoints.append(2)
-    radii.append([edgeradii[i],edgeradii[i]])
-    category.append([vessel_type[i],vessel_type[i]])
-edgepoints = arr(edgepoints)
-nedgepoints = arr(nedgepoints)
-radii = arr(radii).flatten()
-category = arr(category).flatten()
+def create_bifurcation(l=100.,r=30.,a=30.):
+    nodes, connectivity, edgeradii, vessel_type = bifurcation(l=100.,r=30.,a=30.)
+    edgepoints = nodes[connectivity]
 
-nodes = np.asarray(nodes,dtype='float')
-nedgepoints = np.asarray(nedgepoints,dtype='int')
-connectivity = np.asarray(connectivity,dtype='int')
-edgepoints = np.asarray(edgepoints,dtype='float')
-radii = np.asarray(radii,dtype='float')
-category = np.asarray(category,dtype='int')
+    nnode = nodes.shape[0]
+    nedge = nedgepoints.shape[0]
+    npoint = edgepoints.shape[0]
 
-nnode = nodes.shape[0]
-nedge = nedgepoints.shape[0]
-npoint = edgepoints.shape[0]
-    
-graph = spatialgraph.SpatialGraph(initialise=True,scalars=['Radii','VesselType'])
-graph.set_definition_size('VERTEX',nnode)
-graph.set_definition_size('EDGE',nedge)
-graph.set_definition_size('POINT',npoint)
-graph.set_data(nodes,name='VertexCoordinates')
-graph.set_data(connectivity,name='EdgeConnectivity')
-graph.set_data(nedgepoints,name='NumEdgePoints')
-graph.set_data(edgepoints,name='EdgePointCoordinates')
-graph.set_data(radii,name='Radii')
-graph.set_data(category,name='VesselType')
+    nedgepoints = np.zeros(nedge,dtype='int') + 2
 
-graph.sanity_check(deep=True)
+    graph = spatialgraph.SpatialGraph(initialise=True,scalars=['Radii','VesselType'])
+    graph.set_definition_size('VERTEX',nnode)
+    graph.set_definition_size('EDGE',nedge)
+    graph.set_definition_size('POINT',npoint)
+    graph.set_data(nodes,name='VertexCoordinates')
+    graph.set_data(connectivity,name='EdgeConnectivity')
+    graph.set_data(nedgepoints,name='NumEdgePoints')
+    graph.set_data(edgepoints,name='EdgePointCoordinates')
+    graph.set_data(edgeradii,name='Radii')
+    graph.set_data(vessel_type,name='VesselType')
 
-#graph._print()
-ofile = '/mnt/data2/kidney_cco/segment1.am'
-tp = graph.plot_graph(show=False,block=False)
-gmesh_artery = tp.cylinders_combined
-ofile2 = ofile.replace('.am','.ply')
-import open3d as o3d
-o3d.io.write_triangle_mesh(ofile2,gmesh_artery)
-tp.destroy_window()
-graph.write(ofile)
-print(f'Saved as {ofile}')
+def main(type='bifurcation'):
 
-# Convert to JSON
-from pymira.amirajson import convert
-convert(ofile)
+    #nodes, connectivity, edgeradii, vessel_type = double_bifurcation_reconnected()
+    #nodes, connectivity, edgeradii, vessel_type = bifurcation()
+    #nodes, connectivity, edgeradii, vessel_type = segment()
+    nodes, connectivity, edgeradii, vessel_type = kidney_cco()
+    #nodes, connectivity, edgeradii, vessel_type = kidney_cco_simple()
+
+    nodes = arr(nodes)
+    #nodes[:,0] -= 250
+    #nodes = -nodes
+                    
+    edgepoints,nedgepoints,radii,category = [],[],[],[]
+    for i,conn in enumerate(connectivity):
+        edgepoints.append(nodes[conn[0]])
+        edgepoints.append(nodes[conn[1]])
+        nedgepoints.append(2)
+        radii.append([edgeradii[i],edgeradii[i]])
+        category.append([vessel_type[i],vessel_type[i]])
+    edgepoints = arr(edgepoints)
+    nedgepoints = arr(nedgepoints)
+    radii = arr(radii).flatten()
+    category = arr(category).flatten()
+
+    nodes = np.asarray(nodes,dtype='float')
+    nedgepoints = np.asarray(nedgepoints,dtype='int')
+    connectivity = np.asarray(connectivity,dtype='int')
+    edgepoints = np.asarray(edgepoints,dtype='float')
+    radii = np.asarray(radii,dtype='float')
+    category = np.asarray(category,dtype='int')
+
+    nnode = nodes.shape[0]
+    nedge = nedgepoints.shape[0]
+    npoint = edgepoints.shape[0]
+        
+    graph = spatialgraph.SpatialGraph(initialise=True,scalars=['Radii','VesselType'])
+    graph.set_definition_size('VERTEX',nnode)
+    graph.set_definition_size('EDGE',nedge)
+    graph.set_definition_size('POINT',npoint)
+    graph.set_data(nodes,name='VertexCoordinates')
+    graph.set_data(connectivity,name='EdgeConnectivity')
+    graph.set_data(nedgepoints,name='NumEdgePoints')
+    graph.set_data(edgepoints,name='EdgePointCoordinates')
+    graph.set_data(radii,name='Radii')
+    graph.set_data(category,name='VesselType')
+
+    graph.sanity_check(deep=True)
+
+    #graph._print()
+    ofile = '/mnt/data2/kidney_cco/segment1.am'
+    tp = graph.plot_graph(show=False,block=False)
+    gmesh_artery = tp.cylinders_combined
+    ofile2 = ofile.replace('.am','.ply')
+    import open3d as o3d
+    o3d.io.write_triangle_mesh(ofile2,gmesh_artery)
+    tp.destroy_window()
+    graph.write(ofile)
+    print(f'Saved as {ofile}')
+
+    # Convert to JSON
+    from pymira.amirajson import convert
+    convert(ofile)
