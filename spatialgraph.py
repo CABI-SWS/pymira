@@ -1211,7 +1211,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
         
         if category is None:
             category = np.zeros(edgepoints.shape[0],dtype='int')
-            edge_category = np.zeros(self.nedgepoint,dtype='int')
+            edge_category = np.zeros(self.nedge,dtype='int')
 
         #inds = np.linspace(0,edgeconn.shape[0]-1,edgeconn.shape[0],dtype='int')
         #edge_inds = np.repeat(inds,nedgepoints)
@@ -1986,7 +1986,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
         
         self.set_data(radius,name=rad_field_name)
         
-    def identify_graphs(self):
+    def identify_graphsOLD(self):
     
         graphInd = np.zeros(self.nnode,dtype='int')
         curGraph = 1
@@ -2272,6 +2272,9 @@ class SpatialGraph(amiramesh.AmiraMesh):
                     new_coords = coords
                 else:
                     return
+                dist1 = np.linalg.norm(e.end_node_coords-new_coords)
+                if dist1==0.:
+                    return
                 edgepoints[e.i0] = new_coords
             elif e.end_node_index==nodeIndex:
                 if coords is None and displacement is not None:
@@ -2279,6 +2282,9 @@ class SpatialGraph(amiramesh.AmiraMesh):
                 elif coords is not None:
                     new_coords = coords
                 else:
+                    return
+                dist1 = np.linalg.norm(e.start_node_coords-new_coords)
+                if dist1==0.:
                     return
                 edgepoints[e.i0+1] = new_coords
             else:
@@ -2312,7 +2318,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
                 dist0 = np.linalg.norm(e.start_node_coords-e.end_node_coords)
                 dist1 = np.linalg.norm(e.start_node_coords-new_coords)
                 translated_points = e.coordinates - e.coordinates[0]
-            if np.any(np.isfinite(translated_points)==False):
+            if np.any(np.isfinite(translated_points)==False) or dist0==0. or dist1==0.:
                 #breakpoint()
                 return
             
@@ -2347,6 +2353,8 @@ class SpatialGraph(amiramesh.AmiraMesh):
                     elif e.end_node_index==nodeIndex:
                         new_points = scale_factor * translated_points + e.start_node_coords
                         
+            if np.any(np.isfinite(new_points)==False):
+                breakpoint()
             edgepoints[e.i0:e.i1] = new_points
             
         self.set_data(edgepoints,name='EdgePointCoordinates')
@@ -2360,12 +2368,15 @@ class SpatialGraph(amiramesh.AmiraMesh):
         """
     
         nodes = self.get_data('VertexCoordinates').copy()
-        #edgepoints = self.get_data('EdgePointCoordinates').copy()
+        edgepoints = self.get_data('EdgePointCoordinates') #.copy()
         conn_edges = self.get_edges_containing_node(nodeIndex)
         old_coords = nodes[nodeIndex]
         
         for ei in conn_edges:
             e = self.get_edge(ei)
+
+            if np.all(np.all(e.coordinates==e.coordinates[0],axis=0)):
+                breakpoint()
             
             new_coords = self._translate_edge_coords(nodeIndex,e,coords=coords,displacement=displacement)
             

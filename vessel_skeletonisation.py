@@ -122,8 +122,12 @@ def skeletonize(image,resolution=arr([1.,1.,1.,]),offset=arr([0.,0.,0.])):
     
     from pymira import midline_to_graph
     # 2D to 3D
-    #skeleton3d = np.expand_dims(skeleton,axis=-1)
-    skeleton3d = skeleton.copy()
+    dims = skeleton.shape
+    if len(dims)==2:
+        skeleton3d = np.expand_dims(skeleton,axis=-1)
+        dist = np.expand_dims(dist,axis=-1)
+    else:
+        skeleton3d = skeleton.copy()
     m2g = midline_to_graph.Midline2Graph(skeleton3d.astype('float'))
     edgepointsInt, edgeconn = m2g.convert() 
 
@@ -140,7 +144,7 @@ def skeletonize(image,resolution=arr([1.,1.,1.,]),offset=arr([0.,0.,0.])):
             nodes[:,i] = (nodes[:,i]*resolution[i]) + offset[i]
             edgepoints[:,i] = (edgepoints[:,i]*resolution[i]) + offset[i]
     
-    graph = spatialgraph.SpatialGraph(initialise=True,scalars=['Radius'])      
+    graph = spatialgraph.SpatialGraph(initialise=True,scalars=['Radius','VesselType'])      
     graph.set_definition_size('VERTEX',nodes.shape[0])
     graph.set_definition_size('EDGE',edgeconn.shape[0])
     graph.set_definition_size('POINT',edgepoints.shape[0])
@@ -149,6 +153,7 @@ def skeletonize(image,resolution=arr([1.,1.,1.,]),offset=arr([0.,0.,0.])):
     graph.set_data(nedgepoints,name='NumEdgePoints')
     graph.set_data(edgepoints,name='EdgePointCoordinates')
     graph.set_data(radii,name='Radius')
+    graph.set_data(np.zeros(radii.shape[0],dtype='int'),name='VesselType')
     graph.set_graph_sizes()
 
     #ed = spatialgraph.Editor()

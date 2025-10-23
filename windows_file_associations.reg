@@ -1,0 +1,13 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\.am]
+@="AMFile.PyMira"
+
+[HKEY_CURRENT_USER\Software\Classes\AMFile.PyMira]
+@="AM graph file"
+
+[HKEY_CURRENT_USER\Software\Classes\AMFile.PyMira\shell]
+@="open"
+
+[HKEY_CURRENT_USER\Software\Classes\AMFile.PyMira\shell\open\command]
+@="\"C:\\Users\\simon\\anaconda3\\envs\\vessel_growth\\Lib\site-packages\\pymira\\plot_spatialgraph.bat\\" \"%1\""
