@@ -25,7 +25,8 @@ def align_vector_to_another(a=np.array([0, 0, 1]), b=np.array([1, 0, 0])):
 class TubePlot(object):
 
     def __init__(self,graph, parameter=None, cylinders=None, cylinders_combined=None, color=None, edge_color=None, 
-                         min_radius=0.,domain_radius=None,radius_scale=1.,fixed_radius=None,domain_centre=None,radius_based_resolution=True,cyl_res=10,edge_filter=None,node_filter=None,
+                         min_radius=0.,domain_radius=None,radius_scale=1.,fixed_radius=None,domain_centre=None,
+                         radius_based_resolution=True,cyl_res=10,edge_filter=None,node_filter=None,
                          cmap_range=[None,None],bgcolor=[0.,0.,0.],cmap=None,win_width=6000,win_height=6000,grab_file=None,
                          edge_highlight=[],node_highlight=[],highlight_color=[1,1,1],scalar_color_name=None,log_color=False,
                          show=True,block=True,engine='open3d',domain=None,domain_type='cylinder',ignore_domain=False,additional_meshes=None):
