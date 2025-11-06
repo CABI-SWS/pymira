@@ -127,8 +127,7 @@ class TubePlot(object):
             self.combine_cylinders()                
 
         if self.block:
-            self._show_plot()
-            
+            self._show_plot()            
             
     def find_domain_intersection(self,start_coord,end_coord,epsilon=1e-6):
         # Find which face segment intersects

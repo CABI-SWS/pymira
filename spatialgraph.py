@@ -4804,7 +4804,7 @@ class GVars(object):
     def add_edge(self,start_node_index,end_node_index,new_scalar_vals,points=None):
         new_conn = [start_node_index,end_node_index]
         nodes = self.nodecoords[new_conn]
-        if points is None or not np.all(points[0]==self.nodecoords[new_conn[0]]) or not np.all(points[-1]==self.nodecoords[new_conn[1]]):
+        if points is None or not np.all(points[0]-self.nodecoords[new_conn[0]]<1e-12) or not np.all(points[-1]-self.nodecoords[new_conn[1]]<1e-12):
             self.add_edgeconn(new_conn)
             self.add_edgepoints(self.nodecoords[new_conn],new_scalar_vals,edgeInd=self.edge_ptr-1)
         else:
