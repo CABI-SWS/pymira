@@ -3114,6 +3114,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
             e = self.get_edge(ei)
 
             if np.all(np.all(e.coordinates==e.coordinates[0],axis=0)):
+                print('Degenerate node present: Edge {ei}')
                 breakpoint()
             
             new_coords = self._translate_edge_coords(nodeIndex,e,coords=coords,displacement=displacement)
@@ -4836,6 +4837,7 @@ class GVars(object):
         
     def remove_edges(self,edge_inds_to_remove):
 
+        edge_inds_to_remove = arr(edge_inds_to_remove)
         if edge_inds_to_remove.shape[0]==0:
             return
     
@@ -5086,17 +5088,31 @@ class GVars(object):
             t = np.cumsum(dists)
 
             # Calculate insertion point
-            new_loc = t[-1]*fr
-            s0 = np.where(t<=new_loc)[0][-1]
-            s1 = np.where(t>=new_loc)[0][0]
-            s0fr = dists[s0]/t[-1]
-            s1fr = dists[s1]/t[-1]
-            sfr = fr - s0fr
-
             if newpoint is None:
+                new_loc = t[-1]*fr
+                s0 = np.where(t<=new_loc)[0][-1]
+                s1 = np.where(t>=new_loc)[0][0]
+                s0fr = dists[s0]/t[-1]
+                s1fr = dists[s1]/t[-1]
+                sfr = fr - s0fr
                 newpoint = edge[s0] + (edge[s1] - edge[s0])*sfr
-            
-            # Option to return locaiton only and bypass creation of new edge and node
+            else:
+                A,B = edge[:-1],edge[1:] 
+                AB = B - A
+                AP = newpoint - A
+                ab2 = np.einsum('ij,ij->i', AB, AB)   # squared lengths (M,)
+                # Avoid division by zero for degenerate segments
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    t = np.einsum('ij,ij->i', AP, AB) / ab2
+                t = np.clip(np.nan_to_num(t, nan=0.0), 0.0, 1.0)
+
+                Q = A + t[:, None] * AB      # closest points on each segment, (M,3)
+                diff = Q - newpoint
+                d2 = np.einsum('ij,ij->i', diff, diff)  # (M,)
+                i = int(np.argmin(d2))
+                s0,s1 = i,i+1
+
+            # Option to return location only and bypass creation of new edge and node
             if node_location_only:
                 return newpoint
             
@@ -5111,7 +5127,6 @@ class GVars(object):
             edgepoint_index = s0 + 1
             edge = new_edge
             npoints += 1
-            #breakpoint()
         
         # Reload data
         nedgepoints = self.nedgepoints[self.edgeconn_allocated]
