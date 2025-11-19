@@ -216,6 +216,10 @@ class SpatialGraph(amiramesh.AmiraMesh):
             
     def print(self):
         self.__repr__()
+
+    def add_edgepoint_field(self,name,vals):
+        marker = self.generate_next_marker()
+        self.add_field(name=name,marker=marker,definition='POINT',type=vals.dtype,nelements=1,data=vals)
         
     def unique_node_label(self,nl=None):
         if nl is None:

@@ -29,7 +29,7 @@ class TubePlot(object):
                          radius_based_resolution=True,cyl_res=10,edge_filter=None,node_filter=None,
                          cmap_range=[None,None],bgcolor=[0.,0.,0.],cmap=None,win_width=6000,win_height=6000,grab_file=None,
                          edge_highlight=[],node_highlight=[],highlight_color=[1,1,1],scalar_color_name=None,log_color=False,
-                         show=True,block=True,engine='open3d',domain=None,domain_type='cylinder',ignore_domain=False,additional_meshes=None):
+                         show=True,block=True,domain=None,domain_type='cylinder',ignore_domain=False,additional_meshes=None):
         self.vis = None
         self.headless = False # If headless mode detected, don't try and display anything
         self.graph = graph
@@ -69,15 +69,13 @@ class TubePlot(object):
         self.edge_filter = edge_filter
         self.node_filter = node_filter
         
-        # Backend (open3d) (pyvista no longer supported!)
-        self.engine = 'open3d' #engine
         # Colour range for edges [None,None]
         self.cmap_range = cmap_range
         # Background colour
         self.bgcolor = bgcolor
         # Array of edge colours ([nedge])
         self.edge_color = edge_color
-        # Edge colors ([nedge,3])
+        # Edge colors ([nedgepoint,3])
         self.color = color
         # Colour map name ('gray','jet')
         self.cmap = cmap
@@ -313,12 +311,8 @@ class TubePlot(object):
         for i in sind[0]:
             cyl = self.cylinders[i]
             if cyl is not None:
-                if self.engine=='open3d':
-                    cyl.paint_uniform_color(cols[i])
-                elif self.engine=='pyvista':
-                    pass
-                    #cyl['color'] = np.zeros(cyl.n_points) + self.edge_color[i]
-            
+                cyl.paint_uniform_color(cols[i])
+
         self.combine_cylinders()
         
         if len(self.node_highlight)>0:
@@ -470,32 +464,18 @@ class TubePlot(object):
                                 else:
                                     rad_cur = rads[j]
                                     
-                                if self.engine=='open3d':
-                                    cyl = o3d.geometry.TriangleMesh.create_cylinder(height=height,radius=rad_cur, resolution=resolution)
-                                    translation = x0 + vec*height*0.5
-                                    cyl = cyl.translate(translation, relative=False)
-                                    axis, angle = align_vector_to_another(np.asarray([0.,0.,1.]), vec)
-                                    if angle!=0.:
-                                        axis_a = axis * angle
-                                        cyl = cyl.rotate(R=o3d.geometry.get_rotation_matrix_from_axis_angle(axis_a), center=cyl.get_center()) 
+                                cyl = o3d.geometry.TriangleMesh.create_cylinder(height=height,radius=rad_cur, resolution=resolution)
+                                translation = x0 + vec*height*0.5
+                                cyl = cyl.translate(translation, relative=False)
+                                axis, angle = align_vector_to_another(np.asarray([0.,0.,1.]), vec)
+                                if angle!=0.:
+                                    axis_a = axis * angle
+                                    cyl = cyl.rotate(R=o3d.geometry.get_rotation_matrix_from_axis_angle(axis_a), center=cyl.get_center()) 
 
-                                    # Default - paint white
-                                    cyl.paint_uniform_color([0.,0.,0.])
-                                    
-                                    self.cylinders[i0+j] = cyl
-                                    
-                                elif self.engine=='pyvista':
-                                    pass
-                                    #poly = pv.PolyData()
-                                    #poly.points = coords
-                                    #the_cell = np.arange(0, len(coords), dtype=np.int_)
-                                    #the_cell = np.insert(the_cell, 0, len(coords))
-                                    #poly.lines = the_cell
-                                    #poly['radius'] = rads
-                                    ##tube = poly.tube(radius=rads[0],n_sides=3) # scalars='stuff', 
-                                    #tube = pv.Spline(coords, coords.shape[0]).tube(radius=rads[0])
-                                    ##tube['color'] = np.linspace(1,1,tube.n_points)
-                                    #self.cylinders[i0+j] = tube
+                                # Default - paint white
+                                cyl.paint_uniform_color([0.,0.,0.])
+                                
+                                self.cylinders[i0+j] = cyl
                                     
                                 excl = False
                 
@@ -507,32 +487,24 @@ class TubePlot(object):
         if self.headless:
             return
     
-        if self.engine=='open3d':
-            if self.vis is not None:
-                self.vis.remove_geometry(self.cylinders_combined)
-        
-            # Combine (select active cylinder entries)
-            sind = self.cylinder_inds
-            if len(sind[0])>2:
-                # Sum first two - otherwise combined variable becomes first cylinder reference
-                self.cylinders_combined = self.cylinders[sind[0][0]] + self.cylinders[sind[0][1]]
-                for cyl in self.cylinders[sind[0][2:]]:
-                    if cyl is not None:
-                        self.cylinders_combined += cyl
-            elif len(sind[0])==2:
-                self.cylinders_combined = self.cylinders[sind[0][0]] + self.cylinders[sind[0][1]] 
-            elif len(sind[0])==1:
-                self.cylinders_combined = self.cylinders[sind[0][0]] 
-                
-            if self.vis is not None:
-                self.vis.add_geometry(self.cylinders_combined)
-                
-        elif self.engine=='pyvista':
-            pass
-            #blocks = pv.MultiBlock(self.cylinders[self.cylinder_inds].tolist())
-            #self.cylinders_combined = blocks.combine()
-            #self.vis.add_mesh(self.cylinders_combined, smooth_shading=True, scalar_bar_args={'title':self.scalar_color_name}) # scalars='length', 
-            #self.vis.show()
+        if self.vis is not None:
+            self.vis.remove_geometry(self.cylinders_combined)
+    
+        # Combine (select active cylinder entries)
+        sind = self.cylinder_inds
+        if len(sind[0])>2:
+            # Sum first two - otherwise combined variable becomes first cylinder reference
+            self.cylinders_combined = self.cylinders[sind[0][0]] + self.cylinders[sind[0][1]]
+            for cyl in self.cylinders[sind[0][2:]]:
+                if cyl is not None:
+                    self.cylinders_combined += cyl
+        elif len(sind[0])==2:
+            self.cylinders_combined = self.cylinders[sind[0][0]] + self.cylinders[sind[0][1]] 
+        elif len(sind[0])==1:
+            self.cylinders_combined = self.cylinders[sind[0][0]] 
+            
+        if self.vis is not None:
+            self.vis.add_geometry(self.cylinders_combined)
         
     def create_plot_window(self,bgcolor=None,win_width=None,win_height=None):
     
@@ -543,44 +515,21 @@ class TubePlot(object):
         if bgcolor is not None:
             self.bgcolor = bgcolor           
     
-        if self.engine=='open3d':
-            if True:
-                self.vis = o3d.visualization.Visualizer() #O3DVisualizer()
-                self.vis.create_window(width=self.win_width,height=self.win_height,visible=self.show)
-                                        
-                if self.cylinders_combined is not None:
-                    self.vis.add_geometry(self.cylinders_combined)
-                if self.additional_meshes is not None:
-                    self.vis.add_geometry(self.additional_meshes)
-                
-                opt = self.vis.get_render_option()
-                self.headless = False
-                if opt is not None:
-                    opt.background_color = np.asarray(self.bgcolor)
-                else:
-                    self.headless = True
-                    self.vis.destroy_window()
-            else:
-                import open3d.visualization.rendering as rendering
-                import open3d.visualization.gui as gui
-                gui.Application.instance.initialize()
-                self.vis = o3d.visualization.O3DVisualizer()
-                
-                # Create a dummy window (off-screen or tiny)
-                dummy_window = gui.Application.instance.create_window("Hidden", width=self.win_width, height=self.win_height)
-
-                # Set up the renderer
-                renderer = rendering.OffscreenRenderer(self.win_width, self.win_height)
-                
-                if self.cylinders_combined is not None:
-                    self.vis.add_geometry(self.cylinders_combined)
-                if self.additional_meshes is not None:
-                    self.vis.add_geometry(self.additional_meshes)
-
-        elif self.engine=='pyvista':
-            pass
-            #self.vis = pv.Plotter(window_size=[self.win_width,self.win_height])
-            #self.vis.set_background(self.bgcolor)
+        self.vis = o3d.visualization.Visualizer() #O3DVisualizer()
+        self.vis.create_window(width=self.win_width,height=self.win_height,visible=self.show)
+                                
+        if self.cylinders_combined is not None:
+            self.vis.add_geometry(self.cylinders_combined)
+        if self.additional_meshes is not None:
+            self.vis.add_geometry(self.additional_meshes)
+        
+        opt = self.vis.get_render_option()
+        self.headless = False
+        if opt is not None:
+            opt.background_color = np.asarray(self.bgcolor)
+        else:
+            self.headless = True
+            self.vis.destroy_window()
         
     def _show_plot(self):
         if self.vis is not None and self.headless==False:
@@ -588,27 +537,24 @@ class TubePlot(object):
             self.vis.destroy_window()
         
     def update(self):
-        if self.engine=='open3d':
-            if self.vis is not None and self.headless==False:
-                meshes = []
-                #breakpoint()
-                if self.additional_meshes is not None:
-                    self.vis.update_geometry(self.additional_meshes)
-                if self.cylinders_combined is not None: 
-                    meshes.append(self.cylinders_combined)
-                    self.vis.update_geometry(self.cylinders_combined)
+        if self.vis is not None and self.headless==False:
+            meshes = []
+            #breakpoint()
+            if self.additional_meshes is not None:
+                self.vis.update_geometry(self.additional_meshes)
+            if self.cylinders_combined is not None: 
+                meshes.append(self.cylinders_combined)
+                self.vis.update_geometry(self.cylinders_combined)
         
     def screen_grab(self,fname):
         if self.headless:
             return
-        if self.engine=='open3d':
-            if self.vis is not None:
-                self.vis.capture_screen_image(fname,do_render=True)     
+        if self.vis is not None:
+            self.vis.capture_screen_image(fname,do_render=True)     
         
     def destroy_window(self):
-        if self.engine=='open3d':
-            if self.vis is not None:
-                control = self.vis.get_view_control()
-                self.vis.destroy_window()  
-                del control
-                del self.vis            
+        if self.vis is not None:
+            control = self.vis.get_view_control()
+            self.vis.destroy_window()  
+            del control
+            del self.vis            
