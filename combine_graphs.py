@@ -29,13 +29,15 @@ def merge_graphs(graph1,graph2):
         #print(('Adding {} {}...'.format(marker,fName)))
         graph1.fields.append(f)
         
-def combine_graphs(graph1,graph2):
+def combine_graphs(graph1,graph2,common_only=False):
 
     # Combine fields common to both graphs
     
     req_fields = ['VertexCoordinates', 'EdgePointCoordinates', 'EdgeConnectivity', 'NumEdgePoints']
 
     # Common fields
+    g1_fields = graph1.fieldNames.copy()
+    g2_fields = graph2.fieldNames.copy()
     fields = list(set(graph1.fieldNames).intersection(graph2.fieldNames))
     
     graphComb = graph1.copy()
@@ -67,6 +69,13 @@ def combine_graphs(graph1,graph2):
         
         #print('Combining {}'.format(fName))
         graphComb.set_data(data,name=fName)
+
+    # Common only
+    if common_only:
+        cfields = graphComb.fields.copy()
+        for field in cfields:
+            if field['name'] not in g2_fields:
+                graphComb.remove_field(field['name'])
     
     #print(nnode1,nnode2)
     graphComb.set_definition_size('VERTEX',nnode1+nnode2)

@@ -701,202 +701,272 @@ class SpatialGraph(amiramesh.AmiraMesh):
             per_scal.append([np.array([], dtype=float) for _ in range(num_channels)])
         return per_scal  
 
-    def split_high_degree_nodes(self, max_degree=3, displacement=1e-3, endpoint_atol=None,scalar_endpoint_policy='copy',scalar_fill_value=None):
+    def split_high_degree_nodes(self,
+                                max_degree=3,
+                                displacement=1e-3,
+                                endpoint_atol=None,
+                                scalar_endpoint_policy='copy',
+                                scalar_fill_value=None):
         """
         Split nodes with degree > max_degree by adding displaced helper nodes,
         reassign incident edges to helpers, and keep edge polylines consistent.
 
+        This version is optimised:
+        - adjacency is built once and updated incrementally
+        - incident edge directions are computed vectorially
+        - we avoid repeatedly rebuilding large structures.
+
         Inputs
         ------
-        nodes  : (N,3)
-        edges  : (M,2)
-        edge_points : (P,3) flattened EdgePointCoordinates
-        edge_point_counts : (M,) NumEdgePoints
         max_degree : maximum degree allowed per node
         displacement : helper node offset in world units
         endpoint_atol : tolerance for matching a polyline endpoint to a node position.
                         Default is 10 * displacement, good for small offsets.
-
-        Returns
-        -------
-        new_nodes, new_edges, new_edge_points, new_edge_point_counts
+        scalar_endpoint_policy, scalar_fill_value : passed through to
+                        _adjust_polyline_endpoint.
         """
-        nodes = self.get_data('VertexCoordinates')
-        edges = self.get_data('EdgeConnectivity')
+
+        # Core graph data
+        nodes = self.get_data('VertexCoordinates')          # (N, 3)
+        edges_np = self.get_data('EdgeConnectivity').copy() # (M, 2)
         edge_points = self.get_data('EdgePointCoordinates')
         edge_point_counts = self.get_data('NumEdgePoints')
 
-        # Clean obvious issues before we touch polylines
-        #edges = _remove_self_loops(edges)
-        #edges = _unique_undirected(edges)
-
+        # Scalar fields and per-edgepoint data
         scalar_fields = self.get_scalars()
-        scalars = [x['data'] for x in self.get_scalars()]
-        per_coords,per_scal = self.unpack_edgepoints(edge_points, edge_point_counts, scalars=scalars)
+        scalars = [x['data'] for x in scalar_fields]
+        per_coords, per_scal = self.unpack_edgepoints(edge_points,
+                                                    edge_point_counts,
+                                                    scalars=scalars)
 
         if endpoint_atol is None:
             endpoint_atol = max(1e-9, 10.0 * float(displacement))
 
-        new_nodes = nodes.tolist()
-        edges_np = edges.copy()
+        # Work on a numpy array of node coordinates
+        coords = nodes.copy()  # (N_current, 3)
 
-        # Build adjacency by edge indices
-        def build_adj_by_edges(n_nodes, E):
-            adj = [[] for _ in range(n_nodes)]
-            for ei, (u, v) in enumerate(E):
-                if u < n_nodes:
-                    adj[u].append(ei)
-                if v < n_nodes:
-                    adj[v].append(ei)
-            return adj
+        # Build adjacency once: for each node, list of incident edge indices
+        n_nodes = coords.shape[0]
+        adj = [[] for _ in range(n_nodes)]
+        for ei, (u, v) in enumerate(edges_np):
+            adj[u].append(ei)
+            adj[v].append(ei)
 
-        changed = True
-        while changed:
-            changed = False
-            adj = build_adj_by_edges(len(new_nodes), edges_np)
-            deg = [len(a) for a in adj]
-            for n_idx, d in enumerate(deg):
-                if d <= max_degree:
+        # Progress bar based on initial high-degree count
+        nc = self.get_node_count()
+        total = int(np.sum(nc > max_degree))
+        pbar = tqdm(total=total, desc="Splitting high-degree nodes")
+
+        processed_initial = 0
+
+        def degree(i: int) -> int:
+            return len(adj[i])
+
+        # Main loop: keep splitting while any node exceeds max_degree
+        while True:
+            # Find a node with degree > max_degree
+            n_idx = -1
+            for i in range(len(adj)):
+                if degree(i) > max_degree:
+                    n_idx = i
+                    break
+            if n_idx == -1:
+                break  # all nodes satisfy degree constraint
+
+            if processed_initial < total:
+                pbar.update(1)
+                processed_initial += 1
+
+            inc = np.asarray(adj[n_idx], dtype=int)
+            if inc.size <= max_degree:
+                # Degree might have dropped since we scanned degrees
+                continue
+
+            # Vectorised neighbour + direction computation
+            edge_uv = edges_np[inc]                  # (deg, 2)
+            u = edge_uv[:, 0]
+            v = edge_uv[:, 1]
+            other = np.where(u == n_idx, v, u)       # node index at other end
+
+            base = coords[n_idx]                     # (3,)
+            other_coords = coords[other]             # (deg, 3)
+
+            vecs = other_coords - base               # (deg, 3)
+            norms = np.linalg.norm(vecs, axis=1)
+            zero = norms < 1e-12
+            norms[zero] = 1.0
+            dirs = vecs / norms[:, None]             # (deg, 3)
+            if np.any(zero):
+                dirs[zero] = np.array([1.0, 0.0, 0.0])
+
+            # Build local frame and angular ordering (same logic as before)
+            ref = dirs[0]
+            tmp = np.array([1.0, 0.0, 0.0])
+            if abs(np.dot(tmp, ref)) > 0.9:
+                tmp = np.array([0.0, 1.0, 0.0])
+            ux = self._normalize(np.cross(ref, tmp))
+            vy = self._normalize(np.cross(ref, ux))
+            ang = np.arctan2(dirs @ vy, dirs @ ux)
+            order = np.argsort(ang)
+
+            inc = inc[order]
+            dirs = dirs[order]
+
+            # Partition incident edges into chunks as in your original code
+            k = inc.size
+            q = (k + max_degree - 1) // max_degree
+            keep_on_root = max(1, max_degree - (q - 1))
+
+            chunks = []
+            if keep_on_root >= k:
+                chunks.append(inc.tolist())  # nothing to split
+            else:
+                chunks.append(inc[:keep_on_root].tolist())  # stay on root
+                rest = inc[keep_on_root:]
+                # helper chunks (note: this can still exceed max_degree including connector,
+                # but repeated passes will fix remaining high-degree nodes)
+                for i in range(0, rest.size, max_degree):
+                    chunks.append(rest[i:i + max_degree].tolist())
+
+            base = coords[n_idx]
+
+            # Process helper chunks (chunks[0] is kept on root)
+            for c_idx, chunk in enumerate(chunks):
+                if c_idx == 0:
                     continue
 
-                inc = adj[n_idx]
-                # Directions for ordering
-                dirs = []
-                for eidx in inc:
-                    u, v = edges_np[eidx]
-                    other = v if u == n_idx else u
-                    vec = np.asarray(new_nodes[other]) - np.asarray(new_nodes[n_idx])
-                    nrm = np.linalg.norm(vec)
-                    dirs.append(vec / nrm if nrm > 0 else np.array([1.0, 0.0, 0.0]))
-                dirs = np.array(dirs)
-                # Build local frame for angular order
-                ref = dirs[0]
-                tmp = np.array([1.0, 0.0, 0.0])
-                if abs(np.dot(tmp, ref)) > 0.9:
-                    tmp = np.array([0.0, 1.0, 0.0])
-                ux = self._normalize(np.cross(ref, tmp))
-                vy = self._normalize(np.cross(ref, ux))
-                ang = np.arctan2(dirs @ vy, dirs @ ux)
-                order = np.argsort(ang)
-                inc = [inc[i] for i in order]
-                dirs = dirs[order]
-
-                # Partition incident edges
-                q = (len(inc) + max_degree - 1) // max_degree  # number of chunks that would be made
-                keep_on_root = max(1, max_degree - (q - 1))     # leave room for connector edges
-
-                # Build chunks so that root keeps only keep_on_root edges
-                chunks = []
-                if keep_on_root >= len(inc):
-                    chunks = [inc]  # nothing to split
+                # Directions for this chunk, used to choose displacement direction
+                d_slice = dirs[c_idx * max_degree:(c_idx + 1) * max_degree]
+                if d_slice.size == 0:
+                    mean_dir = np.array([1.0, 0.0, 0.0])
                 else:
-                    chunks.append(inc[:keep_on_root])           # edges that remain on original
-                    rest = inc[keep_on_root:]
-                    for i in range(0, len(rest), max_degree):
-                        chunks.append(rest[i:i+max_degree])     # helper chunks
+                    mean_dir = self._normalize(d_slice.mean(axis=0))
 
-                base = np.asarray(new_nodes[n_idx])
+                helper_pos = base + displacement * mean_dir
+                helper_idx = coords.shape[0]
 
-                for c_idx, chunk in enumerate(chunks):
-                    if c_idx == 0:
-                        continue
-                    d_slice = dirs[c_idx*max_degree:(c_idx+1)*max_degree]
-                    mean_dir = self._normalize(d_slice.mean(axis=0)) if len(d_slice) else np.array([1.0, 0.0, 0.0])
+                # Append helper node
+                coords = np.vstack([coords, helper_pos[None, :]])
+                adj.append([])  # new adjacency list for helper node
 
-                    helper_pos = base + displacement * mean_dir
-                    helper_idx = len(new_nodes)
-                    new_nodes.append(helper_pos.tolist())
+                # Reassign endpoints and adjust per-edge data
+                for eidx in chunk:
+                    a, b = edges_np[eidx]
+                    if a == n_idx:
+                        # update adjacency
+                        adj[a].remove(eidx)
+                        edges_np[eidx, 0] = helper_idx
+                        adj[helper_idx].append(eidx)
 
-                    # Reassign endpoints and adjust per-edge data
-                    for eidx in chunk:
-                        a, b = edges_np[eidx]
-                        if a == n_idx:
-                            edges_np[eidx, 0] = helper_idx
-                            per_coords[eidx], per_scal[eidx] = self._adjust_polyline_endpoint(
-                                per_coords[eidx], per_scal[eidx],
-                                old_pos=base, new_pos=helper_pos, other_end_pos=np.asarray(new_nodes[b]),
-                                endpoint_atol=endpoint_atol, move_start=True,
-                                scalar_policy=scalar_endpoint_policy, scalar_fill_value=scalar_fill_value
-                            )
-                        elif b == n_idx:
-                            edges_np[eidx, 1] = helper_idx
-                            per_coords[eidx], per_scal[eidx] = self._adjust_polyline_endpoint(
-                                per_coords[eidx], per_scal[eidx],
-                                old_pos=base, new_pos=helper_pos, other_end_pos=np.asarray(new_nodes[a]),
-                                endpoint_atol=endpoint_atol, move_start=False,
-                                scalar_policy=scalar_endpoint_policy, scalar_fill_value=scalar_fill_value
-                            )
+                        per_coords[eidx], per_scal[eidx] = self._adjust_polyline_endpoint(
+                            per_coords[eidx], per_scal[eidx],
+                            old_pos=base,
+                            new_pos=helper_pos,
+                            other_end_pos=coords[b],
+                            endpoint_atol=endpoint_atol,
+                            move_start=True,
+                            scalar_policy=scalar_endpoint_policy,
+                            scalar_fill_value=scalar_fill_value
+                        )
+                    elif b == n_idx:
+                        adj[b].remove(eidx)
+                        edges_np[eidx, 1] = helper_idx
+                        adj[helper_idx].append(eidx)
 
-                    # Add connector edge A -> H with two points
-                    edges_np = np.vstack([edges_np, np.array([[n_idx, helper_idx]], dtype=int)])
-                    per_coords.append(np.vstack([base, helper_pos]))
+                        per_coords[eidx], per_scal[eidx] = self._adjust_polyline_endpoint(
+                            per_coords[eidx], per_scal[eidx],
+                            old_pos=base,
+                            new_pos=helper_pos,
+                            other_end_pos=coords[a],
+                            endpoint_atol=endpoint_atol,
+                            move_start=False,
+                            scalar_policy=scalar_endpoint_policy,
+                            scalar_fill_value=scalar_fill_value
+                        )
 
-                    # Determine channel count and ensure per_scal length
-                    C = len(per_scal[0])
-                    per_scal = self._ensure_per_scal_len(per_scal, len(per_coords) - 1, C)
+                # Add connector edge (n_idx <-> helper_idx) with two points
+                new_eidx = edges_np.shape[0]
+                edges_np = np.vstack(
+                    [edges_np, np.array([[n_idx, helper_idx]], dtype=int)]
+                )
+                adj[n_idx].append(new_eidx)
+                adj[helper_idx].append(new_eidx)
 
-                    # Collect endpoint scalar rows from the edges moved to this helper
-                    endpoint_rows = []
-                    lengths_for_weights = []
-                    for eidx in chunk:
-                        # which endpoint of this edge lies on the original node?
-                        ei = self._endpoint_index_for_node(per_coords[eidx], base, endpoint_atol)
-                        if ei is None:
-                            # fallback, pick closer endpoint
-                            if len(per_coords[eidx]) >= 2:
-                                d0 = np.linalg.norm(per_coords[eidx][0] - base)
-                                d1 = np.linalg.norm(per_coords[eidx][-1] - base)
-                                ei = 0 if d0 <= d1 else -1
-                            else:
-                                ei = 0
-                        endpoint_rows.append(self._endpoint_scalar_values(per_scal[eidx], ei))
+                # Polyline for connector: base -> helper_pos
+                per_coords.append(np.vstack([base, helper_pos]))
 
-                        # optional weight by current edge length
+                # Ensure scalar list has correct length
+                C = len(per_scal[0]) if per_scal and per_scal[0] is not None else 0
+                per_scal = self._ensure_per_scal_len(per_scal, len(per_coords) - 1, C)
+
+                # Aggregate endpoint scalar values from moved edges to define new connector scalars
+                endpoint_rows = []
+                lengths_for_weights = []
+                for eidx in chunk:
+                    # which endpoint lies at original node position?
+                    ei = self._endpoint_index_for_node(per_coords[eidx],
+                                                    base,
+                                                    endpoint_atol)
+                    if ei is None:
+                        # fallback to closer endpoint
                         if len(per_coords[eidx]) >= 2:
-                            lengths_for_weights.append(float(np.linalg.norm(per_coords[eidx][-1] - per_coords[eidx][0])))
+                            d0 = np.linalg.norm(per_coords[eidx][0] - base)
+                            d1 = np.linalg.norm(per_coords[eidx][-1] - base)
+                            ei = 0 if d0 <= d1 else -1
                         else:
-                            lengths_for_weights.append(1.0)
+                            ei = 0
 
-                    # Choose how to aggregate values into a representative per-channel vector
-                    rep_mode = "median"  # try "mean", "length_weighted", "min", "max" if preferred
-                    rep_vals = self._aggregate_channelwise(endpoint_rows, mode=rep_mode, lengths=lengths_for_weights)
-                    # Ensure we have C values
+                    endpoint_rows.append(
+                        self._endpoint_scalar_values(per_scal[eidx], ei)
+                    )
+
+                    if len(per_coords[eidx]) >= 2:
+                        lengths_for_weights.append(
+                            float(np.linalg.norm(per_coords[eidx][-1] - per_coords[eidx][0]))
+                        )
+                    else:
+                        lengths_for_weights.append(1.0)
+
+                rep_mode = "median"
+                rep_vals = self._aggregate_channelwise(endpoint_rows,
+                                                    mode=rep_mode,
+                                                    lengths=lengths_for_weights)
+
+                if C > 0:
                     if len(rep_vals) < C:
                         rep_vals = rep_vals + [np.nan] * (C - len(rep_vals))
 
-                    # Build per-channel arrays for the new connector edge.
-                    # For a connector, it is reasonable to duplicate the node value at both endpoints.
                     new_edge_scalars = []
                     for c in range(C):
                         v = rep_vals[c]
-                        new_edge_scalars.append(np.array([v, v], dtype=float))
+                        new_edge_scalars.append(
+                            np.array([v, v], dtype=float)
+                        )
+                else:
+                    new_edge_scalars = []
 
-                    # Append scalars for the new edge
-                    per_scal.append(new_edge_scalars)
-                    changed = True        
+                per_scal.append(new_edge_scalars)
 
-                #breakpoint()
-                #gc = self.get_node_count()
-                #print(n_idx,np.mean(deg),changed)
-                #breakpoint()
-                if changed:
-                    break  # rebuild degrees after each split batch
+            # after handling this node, loop back and find next node with degree > max_degree
 
-        # Final dedupe to be safe, keep polylines aligned
-        #edges_np, keep_idx2 = self._unique_undirected(edges_np)
-        #per_coords = [per_coords[i] for i in keep_idx2]
-        #per_scal   = None if per_scal is None else [per_scal[i] for i in keep_idx2]
+        pbar.close()
 
+        # Repack edge data into flat arrays
         new_pts, new_cnt, new_scal = self.repack_edge_data(per_coords, per_scal)
-        nodes = arr(new_nodes)
-        self.set_data(nodes,name='VertexCoordinates')
-        self.set_data(edges_np,name='EdgeConnectivity')
-        self.set_data(new_pts,name='EdgePointCoordinates')
-        self.set_data(new_cnt,name='NumEdgePoints')
-        for i,sc in enumerate(new_scal): self.set_data(sc,name=scalar_fields[i]['name'])
-        self.set_definition_size('VERTEX',nodes.shape[0])
-        self.set_definition_size('EDGE',edges_np.shape[0])
-        self.set_definition_size('POINT',new_pts.shape[0])
+
+        # Write back to graph
+        self.set_data(coords, name='VertexCoordinates')
+        self.set_data(edges_np, name='EdgeConnectivity')
+        self.set_data(new_pts, name='EdgePointCoordinates')
+        self.set_data(new_cnt, name='NumEdgePoints')
+
+        for i, sc in enumerate(new_scal):
+            self.set_data(sc, name=scalar_fields[i]['name'])
+
+        self.set_definition_size('VERTEX', coords.shape[0])
+        self.set_definition_size('EDGE', edges_np.shape[0])
+        self.set_definition_size('POINT', new_pts.shape[0])
+        self.set_graph_sizes()
                 
     def read_json(self,filename):
     
@@ -1802,7 +1872,8 @@ class SpatialGraph(amiramesh.AmiraMesh):
         # Removes all but the largest arterial graph and the largest venous graph
         
         vtn = self.point_scalars_to_node_scalars(name='VesselType')
-        nvt = np.unique(vtn)
+        vtn[vtn==None] = -1
+        #nvt = np.unique(vtn)
         
         gr,cnts = self.identify_graphs()
         #gr = np.concatenate([gra,grv])
@@ -2257,77 +2328,67 @@ class SpatialGraph(amiramesh.AmiraMesh):
                     scalar_nodes[nodeIndex] = np.max(vals)
                         
         return scalar_nodes
-        
-    def point_scalars_to_node_scalars(self,mode='max',name=None,func=np.nanmax):
-    
-        if True: #type(name) is str and mode=='max':
-            data = self.get_data(name)
-            if data is None:
-                return None
-            npts = self.get_data('NumEdgePoints')
-            epi = np.repeat(np.linspace(0,self.nedge-1,self.nedge,dtype='int'),npts)
-            sums = np.bincount(epi, weights=data, minlength=self.nedge)
-            counts = np.bincount(epi, minlength=self.nedge)
-            means = np.divide(sums, counts, where=counts!=0)
-            conns = self.get_data('EdgeConnectivity')
 
-            #if False:
-            mask = (conns[:, 0][:, None] == np.arange(self.nnode)) | (conns[:, 1][:, None] == np.arange(self.nnode))
-            masked_data = np.where(mask, means[:, None], np.nan)
-            if callable(func):
-                node_scalar = func(masked_data, axis=0)
-                node_scalar = np.where(np.all(np.isnan(masked_data), axis=0), None, node_scalar).astype(data.dtype)
-                return node_scalar
-            elif isinstance(func, list) and all(callable(f) for f in func):
-                res = []
-                for f in func:
-                    node_scalar = f(masked_data, axis=0)
-                    node_scalar = np.where(np.all(np.isnan(masked_data), axis=0), None, node_scalar).astype(data.dtype)
-                    res.append(node_scalar)
-                return res
-            else:
-                breakpoint()
-            #else:
-            #node_scalar2 = arr([None if len(np.where((conns[:,0]==n) | (conns[:,1]==n))[0])==0
-            #                       else np.nanmax(means[np.where((conns[:,0]==n) | (conns[:,1]==n))])
-            #                       for n in range(self.nnode)]).astype(data.dtype)
+    def point_scalars_to_node_scalars(self, mode='max', name=None, func=np.nanmax, default=-1):
+        data = self.get_data(name)
+        if data is None:
+            return None
 
+        # 1. point -> edge scalars
+        epi = self.edge_point_index()
+        sums = np.bincount(epi, weights=data, minlength=self.nedge)
+        counts = np.bincount(epi, minlength=self.nedge)
 
-        scalars = self.get_scalars()
-        if name is not None:
-            scalars = [x for x in scalars if x['name']==name]
-            if len(scalars)==0:
-                return None
-    
-        nodes = self.get_data('VertexCoordinates')
+        means = np.full(self.nedge, np.nan, dtype=float)
+        nonzero = counts != 0
+        means[nonzero] = sums[nonzero] / counts[nonzero]
+
+        # 2. collect contribution of edges to nodes
         conns = self.get_data('EdgeConnectivity')
-        npoints = self.get_data('NumEdgePoints')
-        points = self.get_data('EdgePointCoordinates')
-        
-        nsc = len(scalars)
-        scalar_nodes = np.zeros([nsc,nodes.shape[0]]) + np.nan
-    
-        for i,conn in enumerate(conns):
-            npts = int(npoints[i])
-            x0 = int(np.sum(npoints[0:i]))
-            x1 = x0+npts
 
-            for j,scalar in enumerate(scalars):
-                    
-                data = scalar['data']
-                if data is not None:
-                    for node in conn:
-                        if mode=='max':
-                            scalar_nodes[j,node] = np.nanmax([np.max(data[x0:x1]),scalar_nodes[j,node]])
-                        elif scalar['type']=='int':
-                            scalar_nodes[j,node] = np.nanmin([np.min(data[x0:x1]),scalar_nodes[j,node]])
-                        else:
-                            scalar_nodes[j,node] = np.nanmin([np.min(data[x0:x1]),scalar_nodes[j,node]])
+        node_ids = np.concatenate([conns[:, 0], conns[:, 1]])
+        vals     = np.concatenate([means,       means])
 
-        scalar_nodes = scalar_nodes.squeeze()
-        if not np.all((scalar_nodes==node_scalar) | ((~np.isfinite(scalar_nodes) & (~np.isfinite(node_scalar))))):
-            breakpoint()
-        return node_scalar
+        # filter out invalid nodes and NaN edge values
+        valid = (
+            (node_ids >= 0) &
+            (node_ids < self.nnode) &
+            ~np.isnan(vals)
+        )
+        node_ids = node_ids[valid].astype(np.int64)
+        vals     = vals[valid]
+
+        # prepare result array filled with the default value
+        node_scalar = np.full(self.nnode, default, dtype=float)
+
+        # if no edges contribute at all, just return the default-filled array
+        if node_ids.size == 0:
+            return node_scalar if callable(func) else [node_scalar for _ in func]
+
+        # 3. sort contributions by node id to allow grouping
+        order = np.argsort(node_ids)
+        node_ids_sorted = node_ids[order]
+        vals_sorted     = vals[order]
+
+        unique_nodes, starts = np.unique(node_ids_sorted, return_index=True)
+        ends = np.empty_like(starts)
+        ends[:-1] = starts[1:]
+        ends[-1] = node_ids_sorted.size
+
+        def _reduce_one(f):
+            out = node_scalar.copy()
+            for nid, s, e in zip(unique_nodes, starts, ends):
+                seg = vals_sorted[s:e]
+                out[nid] = f(seg)
+            return out
+
+        if callable(func):
+            return _reduce_one(func)
+        elif isinstance(func, list) and all(callable(f) for f in func):
+            return [_reduce_one(f) for f in func]
+        else:
+            raise ValueError("func must be callable or a list of callables")
+
         
     def point_scalars_to_edge_scalars(self,func=np.mean,name=None,data=None):
     
@@ -5072,6 +5133,7 @@ class GVars(object):
         nedge = len(edgeConn)
         nedgepoint = len(edgeCoords)
         
+        edge_index = int(edge_index)
         x0 = int(np.sum(nedgepoints[:int(edge_index)]))
         x1 = x0 + int(nedgepoints[int(edge_index)])
         edge = edgeCoords[x0:x1]
