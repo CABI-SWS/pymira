@@ -17,6 +17,7 @@ from tqdm import tqdm, trange # progress bar
 import matplotlib as mpl
 from matplotlib import pyplot as plt
 import copy
+from itertools import combinations
 
 def update_array_index(vals,inds,keep):
     # Updates/offets indices for an array (vals) to exclude values in a flag array (keep)
@@ -173,6 +174,139 @@ def split_artery_vein(graph,gfile=None,capillaries=False):
         return agraph,vgraph,cgraph
     else:
         return agraph,vgraph
+
+def _rotation_matrix_from_vectors(a, b, eps=1e-12):
+    """
+    Return R such that R @ a == b (approximately), for 3D vectors.
+    a and b can be any length, they will be normalised internally.
+    Handles parallel and anti-parallel cases robustly.
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na < eps or nb < eps:
+        return np.eye(3)  # undefined direction, leave unchanged
+
+    a = a / na
+    b = b / nb
+
+    v = np.cross(a, b)
+    c = np.clip(np.dot(a, b), -1.0, 1.0)  # cos(theta)
+    s = np.linalg.norm(v)
+
+    if s < eps:
+        # parallel (c ~ 1) or anti-parallel (c ~ -1)
+        if c > 0.0:
+            return np.eye(3)
+        # anti-parallel: rotate 180 degrees about any axis orthogonal to a
+        # pick an axis not colinear with a
+        tmp = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        axis = np.cross(a, tmp)
+        axis /= np.linalg.norm(axis)
+        # Rodrigues for theta = pi: R = -I + 2 uu^T
+        u = axis.reshape(3, 1)
+        return -np.eye(3) + 2.0 * (u @ u.T)
+
+    # Rodrigues rotation formula
+    vx = np.array([
+        [0.0,   -v[2],  v[1]],
+        [v[2],   0.0,  -v[0]],
+        [-v[1],  v[0],  0.0],
+    ])
+    R = np.eye(3) + vx + (vx @ vx) * ((1.0 - c) / (s * s))
+    return R
+
+def transform_polyline_to_match_endpoint(polyline, target_point, anchor="start", eps=1e-12):
+    """
+    Uniformly scale + rotate + translate polyline so that:
+      - anchor="start": start is fixed, end maps to target_point (B)
+      - anchor="end":   end is fixed, start maps to target_point (A)
+
+    Parameters
+    ----------
+    polyline : (N, D) array, D is 2 or 3
+    target_point : (D,) arraylike
+        B if anchor="start", or A if anchor="end"
+    anchor : {"start","end"}
+    eps : float
+
+    Returns
+    -------
+    polyline_out : (N, D) array
+    (s, R, t) : scale (float), rotation matrix (D,D), translation (D,)
+    """
+    P = np.asarray(polyline, dtype=float)
+    if P.ndim != 2 or P.shape[0] < 2:
+        raise ValueError("polyline must be (N, D) with N >= 2")
+    D = P.shape[1]
+    if D not in (2, 3):
+        raise ValueError("Only 2D or 3D polylines are supported (D=2 or D=3)")
+
+    target = np.asarray(target_point, dtype=float).reshape(D)
+
+    if anchor == "start":
+        A0 = P[0].copy()
+        B0 = P[-1].copy()
+        fixed = A0
+        moving_src = B0
+        moving_dst = target
+    elif anchor == "end":
+        A0 = P[0].copy()
+        B0 = P[-1].copy()
+        fixed = B0
+        moving_src = A0
+        moving_dst = target
+    else:
+        raise ValueError('anchor must be "start" or "end"')
+
+    v_src = moving_src - fixed
+    v_dst = moving_dst - fixed
+
+    len_src = np.linalg.norm(v_src)
+    len_dst = np.linalg.norm(v_dst)
+
+    # If the source segment is degenerate, scaling/rotation are ill-defined.
+    # Best we can do is translate everything so the moving endpoint lands correctly.
+    if len_src < eps:
+        s = 1.0
+        R = np.eye(D)
+        # translation to map moving_src -> moving_dst
+        t = moving_dst - moving_src
+        return (P + t), (s, R, t)
+
+    # Uniform scale to match endpoint distance
+    s = len_dst / len_src
+
+    # Rotation to align direction vectors (in 2D, embed into 3D and project back)
+    if D == 3:
+        R = _rotation_matrix_from_vectors(v_src, v_dst, eps=eps)
+    else:
+        # 2D: embed in 3D, compute 3D rotation, then take upper-left 2x2
+        v_src3 = np.array([v_src[0], v_src[1], 0.0])
+        v_dst3 = np.array([v_dst[0], v_dst[1], 0.0])
+        R3 = _rotation_matrix_from_vectors(v_src3, v_dst3, eps=eps)
+        R = R3[:2, :2]
+
+    # Transform about the fixed point:
+    # P' = fixed + s * R * (P - fixed) + t, choose t to keep fixed exactly fixed (t=0)
+    # This already keeps fixed fixed, and ensures the moving endpoint lands on target by construction.
+    # (Minor numerical drift handled by a final corrective translation.)
+    P_centered = P - fixed
+    P_rot = (P_centered @ R.T)  # row-vectors, so use R.T
+    P_scaled = s * P_rot
+    P_out = P_scaled + fixed
+
+    # Final tiny corrective translation so moving endpoint is exactly on target
+    if anchor == "start":
+        correction = target - P_out[-1]
+    else:
+        correction = target - P_out[0]
+    t = correction
+    P_out = P_out + t
+
+    return P_out #, (s, R, t)
 
 class SpatialGraph(amiramesh.AmiraMesh):
 
@@ -3046,6 +3180,76 @@ class SpatialGraph(amiramesh.AmiraMesh):
                 curEdges = nextEdges
         
         return edgeStore
+
+    def _transform_poly(self,coords,startpoint=None,endpoint=None):
+
+        if endpoint is not None:
+            return transform_polyline_to_match_endpoint(coords, endpoint, anchor="start", eps=1e-12)
+        if startpoint is not None:
+            return transform_polyline_to_match_endpoint(coords, startpoint, anchor="end", eps=1e-12)
+
+        if len(coords)==2:
+            if startpoint is not None:
+                coords[0] = startpoint
+            elif endpoint is not None:
+                coords[-1] = endpoint
+            return coords
+
+        #new_points = 
+
+        if startpoint is not None: # Move the end point               
+            v0 = coords[-1]-coords[0]
+            v1 = coords[-1]-startpoint
+            dist0 = np.linalg.norm(coords[-1]-coords[0])
+            dist1 = np.linalg.norm(coords[-1]-startpoint)
+            translated_points = coords - coords[-1]
+        elif endpoint is not None: # Move the start point
+            v0 = coords[0]-coords[-1]
+            v1 = coords[0]-endpoint
+            dist0 = np.linalg.norm(coords[0]-coords[-1])
+            dist1 = np.linalg.norm(coords[0]-endpoint)
+            translated_points = coords - coords[0]
+        else:
+            return None
+
+        if np.any(np.isfinite(translated_points)==False) or dist0==0. or dist1==0.:
+            #breakpoint()
+            return
+        
+        scale_factor = dist1 / dist0
+            
+        u0 = v0 / dist0
+        u1 = v1 / dist1
+        rotation_axis = np.cross(u0, u1)
+        axis_magnitude = np.linalg.norm(rotation_axis)
+        
+        if axis_magnitude!=0:
+            rotation_axis /= axis_magnitude  # Normalize the rotation axis
+            angle = np.arccos(np.clip(np.dot(u0, u1), -1.0, 1.0))  # Angle between the two vectors
+            K = np.array([[0, -rotation_axis[2], rotation_axis[1]],[rotation_axis[2], 0, -rotation_axis[0]],[-rotation_axis[1], rotation_axis[0], 0]])
+            R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * np.dot(K, K)
+            
+            if endpoint is not None:
+                new_points = scale_factor * np.dot(R,translated_points.transpose()).transpose() + endpoint
+                new_points[0] = coords[0]
+                new_points[-1] = endpoint
+            elif startpoint is not None:
+                new_points = scale_factor * np.dot(R,translated_points.transpose()).transpose() + startpoint
+                new_points[-1] = coords[-1]
+                new_points[0] = startpoint
+            else:
+                breakpoint()
+        else:
+            # Rotation angle is zero
+            if scale_factor!=1.:
+                if endpoint is not None:
+                    new_points = scale_factor * translated_points + endpoint
+                elif startpoint is not None:
+                    new_points = scale_factor * translated_points + startpoint
+                    
+        if np.any(np.isfinite(new_points)==False):
+            breakpoint()
+        return new_points
         
     def _translate_edge_coords(self,nodeIndex,e,coords=None,displacement=None):
     
@@ -3200,44 +3404,203 @@ class SpatialGraph(amiramesh.AmiraMesh):
         #self.set_data(edgepoints,name='EdgePointCoordinates')
         
         return conn_edges
-        
-    def get_segments(self,return_edge=False,return_counts=False,domain=None):
-        nedgepoint = self.get_data(name='NumEdgePoints') 
-        edgepoints = self.get_data('EdgePointCoordinates')
-        epi = self.edge_point_index()
-        
-        gc = self.get_node_count()
-            
-        segments = np.hstack([edgepoints[:-1],edgepoints[1:]])
-        segments = segments.reshape([segments.shape[0],2,3])
-        epi_seg = np.vstack([epi[:-1],epi[1:]]).transpose()
-        valid = epi_seg[:,0]==epi_seg[:,1]
-        
-        if domain is not None:
-            ins = (np.all(segments[:,0]>=domain[:,0],axis=1)) & (np.all(segments[:,0]<=domain[:,1],axis=1)) & \
-                  (np.all(segments[:,1]>=domain[:,0],axis=1)) & (np.all(segments[:,1]<=domain[:,1],axis=1))
-            valid = valid & ins
-        
-        segments = segments[valid]
-        segment_edges = epi_seg[valid,0]
-        #segment_points = np.linspace(0,np.sum(nedgepoint)-1,np.sum(nedgepoint),dtype='int')-np.repeat(np.cumsum(nedgepoint)-nedgepoint,nedgepoint)
-        #segment_points = segment_points.reshape([int(segment_points.shape[0]/2),2])
-        p0 = np.concatenate([np.linspace(0,x-2,x-1,dtype='int') for x in nedgepoint])
 
-        # Which segment points correspond to a node (-1 if none)
-        edgeconn = self.get_data('EdgeConnectivity')
-        segment_node = np.concatenate([np.concatenate([[arr(edgeconn[i,0])],np.repeat(-1,x-2),[arr(edgeconn[i,1])]]) for i,x in enumerate(nedgepoint)])
-        # How many connections for each segment point
-        sc = gc[segment_node]
-        sc[segment_node<0] = 2
-        segment_points = np.vstack([p0,p0+1]).transpose()
-        
-        if return_edge==False:
-            return segments
-        elif return_counts:
-            return segments,segment_edges,segment_points,segment_node,sc
+    def get_segments(
+        self,
+        return_edge=False,
+        return_counts=False,
+        return_connectivity=False,
+        return_edgeidx=False,
+        domain=None,
+    ):
+        """
+        Build 2 point segments from edge polylines.
+
+        Returns
+        -------
+        If return_edge is False:
+            segments                                   (nseg, 2, 3)
+
+        If return_edge is True and return_counts is False and return_connectivity is False:
+            segments                                   (nseg, 2, 3)
+            segment_edges                              (nseg,)       original graph edge id for each segment
+            segment_edge_local_pairs                   (nseg, 2)      [k, k+1] indices within that edge's polyline
+
+        If return_counts is True:
+            plus
+            segment_node                               (npts,)       node id for each filtered point, -1 if not a true node point
+            sc                                         (npts,)       node degree or count for each filtered point, 2 for interior points
+
+        If return_connectivity is True:
+            plus
+            seg_conn                                   (nconn, 2)    segment adjacency pairs (within edge, and across edges via shared nodes)
+
+        If return_edgeidx is True (only meaningful when return_connectivity is True in your earlier API, but safe here too):
+            plus
+            segment_edgepoint_idx                      (nseg, 2)      global edgepoint indices for each segment endpoint
+        """
+
+        # Load required data
+        nedgepoint = self.get_data(name="NumEdgePoints")          # (nedge,)
+        edgepoints = self.get_data("EdgePointCoordinates")        # (nep, 3)
+        conns = self.get_data("EdgeConnectivity")                 # (nedge, 2)
+        epi_full = self.edge_point_index()                        # (nep,) edge id for each edgepoint
+
+        if nedgepoint is None or edgepoints is None or conns is None or epi_full is None:
+            return None
+
+        nedgepoint = np.asarray(nedgepoint, dtype=int)
+        edgepoints = np.asarray(edgepoints)
+        conns = np.asarray(conns, dtype=int)
+        epi_full = np.asarray(epi_full, dtype=int)
+
+        if edgepoints.ndim != 2 or edgepoints.shape[1] != 3:
+            raise ValueError(f"EdgePointCoordinates must be (N,3), got {edgepoints.shape}")
+
+        nep = edgepoints.shape[0]
+        if nep < 2:
+            return None
+
+        # Global edgepoint index, and local index within each edge polyline
+        global_edgepoint_idx_full = np.arange(nep, dtype=int)
+        edge_offsets = np.r_[0, np.cumsum(nedgepoint)[:-1]].astype(int)   # (nedge,)
+        local_idx_full = global_edgepoint_idx_full - edge_offsets[epi_full]  # (nep,)
+
+        # Optional domain filter, preserves order but removes points
+        if domain is not None:
+            domain = np.asarray(domain)
+            ins = np.all(edgepoints >= domain[:, 0], axis=1) & np.all(edgepoints <= domain[:, 1], axis=1)
+            if not np.any(ins):
+                return None
+
+            coords = edgepoints[ins]
+            epi = epi_full[ins]
+            global_edgepoint_idx = global_edgepoint_idx_full[ins]
+            local_idx = local_idx_full[ins]
         else:
-            return segments,segment_edges,segment_points
+            coords = edgepoints
+            epi = epi_full
+            global_edgepoint_idx = global_edgepoint_idx_full
+            local_idx = local_idx_full
+
+        npts = coords.shape[0]
+        if npts < 2:
+            return None
+
+        # Build only true polyline segments, they must be same edge and consecutive within that edge
+        same_edge = (epi[:-1] == epi[1:])
+        consecutive_along_edge = (local_idx[1:] == local_idx[:-1] + 1)
+        valid = same_edge & consecutive_along_edge
+        if not np.any(valid):
+            return None
+
+        # Segment coordinates, (nseg, 2, 3)
+        segments = np.stack([coords[:-1], coords[1:]], axis=1)[valid]
+
+        # Segment edge ids, (nseg,)
+        segment_edges = epi[:-1][valid]
+
+        # Local within edge indices, what you asked for, (nseg, 2)
+        segment_edge_local_pairs = np.stack([local_idx[:-1], local_idx[1:]], axis=1)[valid]
+
+        # Also keep point indices into the filtered coords array for internal connectivity computations
+        pnt_idx = np.arange(npts, dtype=int)
+        segment_point_pairs_filtered = np.stack([pnt_idx[:-1], pnt_idx[1:]], axis=1)[valid]
+
+        # Global edgepoint indices per segment endpoint, (nseg, 2)
+        segment_edgepoint_idx = np.stack(
+            [global_edgepoint_idx[:-1], global_edgepoint_idx[1:]],
+            axis=1
+        )[valid]
+
+        nseg = segments.shape[0]
+
+        # Per point node mapping, only true first or last point of an edge are nodes
+        segment_node = None
+        sc = None
+        if return_counts or return_connectivity:
+            segment_node = np.full(npts, -1, dtype=int)
+
+            is_true_start = (local_idx == 0)
+            is_true_end = (local_idx == (nedgepoint[epi] - 1))
+
+            if np.any(is_true_start):
+                segment_node[is_true_start] = conns[epi[is_true_start], 0]
+            if np.any(is_true_end):
+                segment_node[is_true_end] = conns[epi[is_true_end], 1]
+
+            gc = self.get_node_count()
+            gc = np.asarray(gc, dtype=int)
+
+            sc = np.full(npts, 2, dtype=int)
+            valid_nodes = segment_node >= 0
+            if np.any(valid_nodes):
+                sc[valid_nodes] = gc[segment_node[valid_nodes]]
+
+        # Segment connectivity
+        seg_conn = None
+        if return_connectivity:
+            conn_pairs = []
+
+            # Within edge connectivity, connect segments that are consecutive by local index
+            # Build a lookup (edge_id, local_start) -> segment_id
+            local_starts = segment_edge_local_pairs[:, 0]
+            lookup = {(int(e), int(ls)): int(si) for si, (e, ls) in enumerate(zip(segment_edges, local_starts))}
+            for si, (e, ls) in enumerate(zip(segment_edges, local_starts)):
+                nxt = lookup.get((int(e), int(ls) + 1), None)
+                if nxt is not None:
+                    conn_pairs.append((int(si), int(nxt)))
+
+            # Cross edge connectivity via shared nodes
+            # Map point index -> segments incident
+            point_to_segs = [[] for _ in range(npts)]
+            for s in range(nseg):
+                a, b = segment_point_pairs_filtered[s]
+                point_to_segs[a].append(s)
+                point_to_segs[b].append(s)
+
+            node_to_segs = {}
+            valid_nodes = np.nonzero(segment_node >= 0)[0]
+            for pi in valid_nodes:
+                nid = int(segment_node[pi])
+                if nid not in node_to_segs:
+                    node_to_segs[nid] = set()
+                for s in point_to_segs[pi]:
+                    node_to_segs[nid].add(int(s))
+
+            for nid, segset in node_to_segs.items():
+                segs = sorted(segset)
+                if len(segs) > 1:
+                    conn_pairs.extend(combinations(segs, 2))
+
+            if conn_pairs:
+                seg_conn = np.asarray(conn_pairs, dtype=int)
+            else:
+                seg_conn = np.empty((0, 2), dtype=int)
+
+        # Returns, preserve your existing style as closely as possible
+        if not return_edge:
+            return segments
+
+        if return_counts:
+            if return_connectivity:
+                if return_edgeidx:
+                    return segments, segment_edges, segment_edge_local_pairs, segment_node, sc, seg_conn, segment_edgepoint_idx
+                return segments, segment_edges, segment_edge_local_pairs, segment_node, sc, seg_conn
+            if return_edgeidx:
+                return segments, segment_edges, segment_edge_local_pairs, segment_node, sc, segment_edgepoint_idx
+            return segments, segment_edges, segment_edge_local_pairs, segment_node, sc
+
+        if return_connectivity:
+            if return_edgeidx:
+                return segments, segment_edges, segment_edge_local_pairs, seg_conn, segment_edgepoint_idx
+            return segments, segment_edges, segment_edge_local_pairs, seg_conn
+
+        if return_edgeidx:
+            return segments, segment_edges, segment_edge_local_pairs, segment_edgepoint_idx
+
+        return segments, segment_edges, segment_edge_local_pairs
+
             
     def check_for_nan(self):
         nodes = self.get_data('VertexCoordinates')

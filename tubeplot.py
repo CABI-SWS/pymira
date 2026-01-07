@@ -480,9 +480,7 @@ class TubePlot(object):
                                 excl = False
                 
         self.cylinder_inds = np.where(self.cylinders)
-        #breakpoint()
-        #o3d.visualization.draw_geometries(self.cylinders[self.cylinders!=None][:50])
-        
+
     def combine_cylinders(self):
         if self.headless:
             return
@@ -505,6 +503,23 @@ class TubePlot(object):
             
         if self.vis is not None:
             self.vis.add_geometry(self.cylinders_combined)
+
+    def adjust_view(self,angle=30.):
+        # Adjust viewpoint - look at the combined mesh's center and fit to view
+        view_ctl = self.vis.get_view_control()
+        view_ctl.set_lookat(self.cylinders_combined.get_center())
+        view_ctl.set_zoom(0.8)
+        
+        rotate = True
+        if rotate:
+            # Rotate view by 30 degrees
+            # Assuming standard front is [0, 0, 1] or similar.
+            # We'll set a specific front vector.
+            # 30 degrees = pi/6
+            # sin(30) = 0.5, cos(30) = 0.866
+            # New front vector: [-0.5, 0.0, -0.866] (looking from 30 deg offset)
+            ang_rad = np.deg2rad(angle)
+            view_ctl.set_front([-np.sin(ang_rad), 0.0, -np.cos(ang_rad)])
         
     def create_plot_window(self,bgcolor=None,win_width=None,win_height=None):
     
