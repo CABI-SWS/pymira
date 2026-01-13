@@ -3930,6 +3930,7 @@ class Editor(object):
                         if np.all(pts[:,2]==pts[0,2]):
                             pcur[:,2] = pts[0,2]
                 except Exception as e:
+                    print(e)
                     breakpoint()
 
             else:
@@ -5426,6 +5427,7 @@ class GVars(object):
         
         x0 = int(np.sum(nedgepoints[:int(edge_index)]))
         x1 = x0 + int(nedgepoints[int(edge_index)])
+
         if npoints==npoints_cur:
             self.edgepoints[x0:x1] = edgepoints
         elif npoints>npoints_cur:
@@ -5450,6 +5452,7 @@ class GVars(object):
                 self.scalar_values[i] = scalars
             if len(self.edgepoints)==0 or np.all(self.edgepoints_allocated==False):
                 breakpoint()
+            self.edgepnt_ptr = np.where(alloc)[0][-1] + 1
         elif npoints<npoints_cur:
             #breakpoint()
             nedgepoints[int(edge_index)] = npoints
@@ -5472,6 +5475,7 @@ class GVars(object):
                 self.scalar_values[i] = scalars
             if len(self.edgepoints)==0 or np.all(self.edgepoints_allocated==False):
                 breakpoint()
+            self.edgepnt_ptr = np.where(alloc)[0][-1] + 1
         else:
             breakpoint()
 
