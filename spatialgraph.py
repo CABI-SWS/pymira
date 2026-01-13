@@ -3938,17 +3938,22 @@ class Editor(object):
                            
             for j,sd in enumerate(scalar_data):
                 sdc = sd[edge.i0:edge.i1]
-                if 'float' in scalar_type[j]:
-                    scalar_data_interp[j].extend(np.linspace(sdc[0],sdc[-1],nn))
-                elif 'int' in scalar_type[j]:
-                    if sdc[0]==sdc[-1]:
-                        scalar_data_interp[j].extend(np.zeros(nn)+sdc[0])
-                    else:
-                        scalar_data_interp[j].extend(np.linspace(sdc[0],sdc[-1],nn,dtype='int'))
-                elif 'bool' in scalar_type[j]:
-                    scalar_data_interp[j].extend(np.linspace(sdc[0],sdc[-1],nn,dtype='bool'))
+                if sdc[0]==sdc[-1]:
+                    scalar_data_interp[j].extend(np.zeros(nn)+sdc[0])
                 else:
-                    breakpoint()
+                    scalar_data_interp[j].extend(np.linspace(sdc[0],sdc[-1],nn,dtype=scalar_type[j]))
+
+                #if 'float' in scalar_type[j]:
+                #    scalar_data_interp[j].extend(np.linspace(sdc[0],sdc[-1],nn))
+                #elif 'int' in scalar_type[j]:
+                #    if sdc[0]==sdc[-1]:
+                #        scalar_data_interp[j].extend(np.zeros(nn)+sdc[0])
+                #    else:
+                #        scalar_data_interp[j].extend(np.linspace(sdc[0],sdc[-1],nn,dtype='int'))
+                #elif 'bool' in scalar_type[j]:
+                #    scalar_data_interp[j].extend(np.linspace(sdc[0],sdc[-1],nn,dtype='bool'))
+                #else:
+                #    breakpoint()
                 
             points_new[e_counter:e_counter+nn] = pcur
             nedge_new[i] = nn
