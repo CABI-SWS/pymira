@@ -1211,7 +1211,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
         
         if ofile is not None:
             self.write(ofile)
-            
+
     def rescale_radius(self,rscale,ofile=None):
         """
         Scale radii by a fixed factor
