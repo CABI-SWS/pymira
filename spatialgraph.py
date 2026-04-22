@@ -316,7 +316,6 @@ class SpatialGraph(amiramesh.AmiraMesh):
     
     def __init__(self,header_from=None,initialise=False,scalars=[],node_scalars=[],path=None):
         amiramesh.AmiraMesh.__init__(self)
-        
         self.nodeList = None
         self.edgeList = None
         self.edgeListPtr = 0
@@ -408,7 +407,6 @@ class SpatialGraph(amiramesh.AmiraMesh):
         """
         Set default fields 
         """
-    
         self.fileType = '3D ASCII 2.0'
         self.filename = ''
         
@@ -1945,6 +1943,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
         
         # Locate arterial input(s)
         mask = np.ones(edgeconn.shape[0])
+        # Mask all nodes that are not arteries (cat=0) or have >1 edge connection (node_count>1)
         mask[(edge_category!=0) | ((node_count[edgeconn[:,0]]!=1) & (node_count[edgeconn[:,1]]!=1))] = np.nan
         if ignore is not None:
             mask[(np.in1d(edgeconn[:,0],ignore)) | (np.in1d(edgeconn[:,1],ignore))] = np.nan
@@ -1954,7 +1953,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
             a_inlet_edge_ind = np.nanargmax(edge_radius*mask)
             a_inlet_edge_nodes = edgeconn[a_inlet_edge_ind]
             a_inlet_node = a_inlet_edge_nodes[node_count[a_inlet_edge_nodes]==1][0]
-        
+        print("Inlet node selected: {}".format(a_inlet_node))
         # Locate vein output(s)
         mask = np.ones(edgeconn.shape[0])
         mask[(edge_category!=1) | ((node_count[edgeconn[:,0]]!=1) & (node_count[edgeconn[:,1]]!=1))] = np.nan
@@ -1966,7 +1965,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
             v_outlet_edge_ind = np.nanargmax(edge_radius*mask)
             v_outlet_edge_nodes = edgeconn[v_outlet_edge_ind]
             v_outlet_node = v_outlet_edge_nodes[node_count[v_outlet_edge_nodes]==1][0]
-        
+        print("Outlet node selected: {}".format(v_outlet_node))
         return a_inlet_node,v_outlet_node 
 
     def get_duplicated_edges(self):

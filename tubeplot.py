@@ -418,7 +418,8 @@ class TubePlot(object):
             radii = radField['data']
     
         nedge = self.graph.nedge
-        if self.edge_filter is None:
+    
+        if self.edge_filter is None or isinstance(self.edge_filter,bool):
             self.edge_filter = np.ones(conns.shape[0],dtype='bool')
         if self.node_filter is None:
             self.node_filter = np.ones(nc.shape[0],dtype='bool')
@@ -430,7 +431,6 @@ class TubePlot(object):
         excluded = []
         for i in trange(nedge):
             excl = True
-            
             if self.edge_filter[i] and self.node_filter[conns[i,0]] and self.node_filter[conns[i,1]]:
                 i0 = np.sum(npoints[:i])
                 i1 = i0+npoints[i]

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymira"
+version = "0.1.0"
+
+[tool.setuptools]
+packages = ["pymira"]
+
+[tool.setuptools.package-dir]
+pymira = "."
