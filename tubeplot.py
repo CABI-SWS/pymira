@@ -29,7 +29,8 @@ class TubePlot(object):
                          radius_based_resolution=True,cyl_res=10,edge_filter=None,node_filter=None,
                          cmap_range=[None,None],bgcolor=[0.,0.,0.],cmap=None,win_width=6000,win_height=6000,grab_file=None,
                          edge_highlight=[],node_highlight=[],highlight_color=[1,1,1],scalar_color_name=None,log_color=False,
-                         show=True,block=True,domain=None,domain_type='cylinder',ignore_domain=False,additional_meshes=None):
+                         show=True,block=True,domain=None,domain_type='cylinder',ignore_domain=False,additional_meshes=None,
+                         gray=False):
         self.vis = None
         self.headless = False # If headless mode detected, don't try and display anything
         self.graph = graph
@@ -101,6 +102,11 @@ class TubePlot(object):
         # Whether to log colour scale (boolean)
         self.log_color = log_color
         
+        self.gray = gray
+        if gray==True:
+            self.cmap = 'gray'
+            self.bgcolor = arr([0,0,0])
+        
         # Create cylinders if they have not been provided
         if self.cylinders is None and self.cylinders_combined is None:
             self.create_plot_cylinders()
@@ -117,6 +123,8 @@ class TubePlot(object):
             if self.scalar_color_name is None:
                 if 'VesselType' in graph.fieldNames:
                     self.scalar_color_name = 'VesselType'
+                elif self.gray:
+                    self.scalar_color_name = None
                 else:
                     radName = graph.get_radius_field()['name']
                     self.scalar_color_name = radName
@@ -237,7 +245,9 @@ class TubePlot(object):
         sind = self.cylinder_inds
             
         # Grab scalar data for lookup table, if required
-        if edge_color is None and (self.edge_color is None or scalar_color_name is not None):
+        if self.gray:
+            self.edge_color = np.ones(nedgepoint)
+        elif edge_color is None and (self.edge_color is None or scalar_color_name is not None):
         #if (edge_color is None and self.edge_color is None) or scalar_color_name is not None:
             scalars = self.graph.get_scalars()
             scalarNames = [x['name'] for x in scalars]
@@ -279,6 +289,8 @@ class TubePlot(object):
         # Set colour map (lookup table) 
         if self.color is not None:
             cols = self.color
+        elif self.gray:
+            cols = np.ones([nedgepoint,3])
         elif self.scalar_color_name=='VesselType':  
             cols = np.zeros([nedgepoint,3]) 
             s_art = np.where(self.edge_color==0) 

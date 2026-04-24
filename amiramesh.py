@@ -112,6 +112,10 @@ class AmiraMesh(object):
                 curData = np.reshape(curData,curField['shape'])
                 if str(dtype).lower() not in ['byte','bool']:
                     curData = curData.astype('float')
+                if str(dtype).lower()=='bool':
+                    # If boolean data are stored as float/integer
+                    if curData[0].astype('float') in [0.,1.]:
+                        curData = curData.astype('float')
                 curField['data'] = curData.astype(dtype)
             except Exception as e:
                 if not quiet:

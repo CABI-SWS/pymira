@@ -3384,7 +3384,9 @@ class SpatialGraph(amiramesh.AmiraMesh):
 
             if np.all(np.all(e.coordinates==e.coordinates[0],axis=0)):
                 print('Degenerate node present: Edge {ei}')
-                breakpoint()
+                ed = Editor()
+                self = ed.displace_degenerate_nodes(self,displacement=0.01)
+                e = self.get_edge(ei)
             
             new_coords = self._translate_edge_coords(nodeIndex,e,coords=coords,displacement=displacement)
             
