@@ -38,7 +38,7 @@ U = align_vector_rotation(A,B)
 #Fi = np.matrix(np.squeeze(Fi))
 #U = Fi * G * np.linalg.inv(Fi)
 
-print U
+print(U)
 Ap = np.transpose(U*A.T)
-print np.linalg.norm(B-np.transpose(U*A.T))
-print'Ap={}'.format(Ap)
+print(np.linalg.norm(B-np.transpose(U*A.T)))
+print('Ap={}'.format(Ap))

@@ -34,6 +34,7 @@ vessel_skeletonisation.py
 ./display_graph.py
 ./embed_graph.py
 ./geometry.py
+./inspect_graph.py
 ./mesh.py
 ./midline_to_graph.py
 ./plot_graph.py

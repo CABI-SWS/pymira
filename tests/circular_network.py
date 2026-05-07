@@ -34,11 +34,11 @@ nodeCount = 0
 pointCount = 0
 curAngle = 0
 turnCount = 0
-print npoint,nconnpoints
+print(npoint, nconnpoints)
 while turnCount<nturn:
 #for i in range(0,npoint,nconnpoints):
-    print 'NODE',nodeCount,np.rad2deg(curAngle)
-    print 'EDGE',pointCount,np.rad2deg(curAngle)
+    print('NODE', nodeCount, np.rad2deg(curAngle))
+    print('EDGE', pointCount, np.rad2deg(curAngle))
     # Start point
     edgepoints[pointCount,:] = [radius*np.cos(curAngle)+centre[0],
                    radius*np.sin(curAngle)+centre[1],
@@ -56,7 +56,7 @@ while turnCount<nturn:
     for j in range(pointCount+1,pointCount+nconnpoints+1):
         curAngle += angular_spacing
         turnCount += 1
-        print 'EDGE',pointCount,np.rad2deg(curAngle)
+        print('EDGE', pointCount, np.rad2deg(curAngle))
         #print 'TURNS:',turnCount
         edgepoints[pointCount,:] = [radius*np.cos(curAngle)+centre[0],
                    radius*np.sin(curAngle)+centre[1],

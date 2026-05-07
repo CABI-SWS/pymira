@@ -11,10 +11,10 @@ import os
 dir_ = r'C:\Users\simon\Dropbox\Ben Vessel Networks'
 f = os.path.join(dir_,'C2M3_vessels.am')
 
-print 'Reading graph: {}'.format(f)
+print('Reading graph: {}'.format(f))
 graph = spatialgraph.SpatialGraph()
 graph.read(f)
-print 'Graph read'
+print('Graph read')
 
 editor = spatialgraph.Editor()
 graph = editor.largest_graph(graph)
