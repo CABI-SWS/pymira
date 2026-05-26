@@ -1141,6 +1141,9 @@ class SpatialGraph(amiramesh.AmiraMesh):
             tp = self.plot_graph(show=False,block=False,min_radius=min_radius,cyl_res=resolution,radius_scale=radius_scale,radius_based_resolution=False)
 
         gmesh = tp.cylinders_combined
+        if tp.cylinders_combined is None:
+            print('No cylinders to export!')
+            return
         import open3d as o3d
         gmesh.compute_vertex_normals()
         o3d.io.write_triangle_mesh(ofile,gmesh)
