@@ -1,6 +1,5 @@
 dill==0.4.0
 matplotlib==3.10.9
-mayavi==4.8.3
 nibabel==5.4.2
 numba==0.65.1
 numpy==2.2.6
