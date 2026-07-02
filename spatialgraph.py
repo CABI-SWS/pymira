@@ -129,7 +129,7 @@ def split_artery_vein(graph,gfile=None,capillaries=False):
     epi = agraph.edgepoint_edge_indices()
     inds = np.where(seg_cat!=0)
     edges_to_delete = np.unique(epi[inds])
-    from pymira.spatialgraph import GVars
+    #from pymira.spatialgraph import GVars
     gv = GVars(agraph)
     gv.remove_edges(edges_to_delete)
     gv.set_in_graph()
@@ -1139,6 +1139,7 @@ class SpatialGraph(amiramesh.AmiraMesh):
             tp = self.plot_graph(show=False,block=False,min_radius=min_radius,cyl_res=resolution,radius_scale=radius_scale,radius_based_resolution=False)
 
         gmesh = tp.cylinders_combined
+
         import open3d as o3d
         gmesh.compute_vertex_normals()
         o3d.io.write_triangle_mesh(ofile,gmesh)

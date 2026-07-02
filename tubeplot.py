@@ -29,7 +29,7 @@ class TubePlot(object):
                          radius_based_resolution=True,cyl_res=10,edge_filter=None,node_filter=None,
                          cmap_range=[None,None],bgcolor=[0.,0.,0.],cmap=None,win_width=6000,win_height=6000,grab_file=None,
                          edge_highlight=[],node_highlight=[],highlight_color=[1,1,1],scalar_color_name=None,log_color=False,
-                         show=True,block=True,domain=None,domain_type='cylinder',ignore_domain=False,additional_meshes=None):
+                         show=True,block=True,domain=None,domain_type='cylinder',ignore_domain=False,additional_meshes=None, headless=False):
         self.vis = None
         self.headless = False # If headless mode detected, don't try and display anything
         self.graph = graph
@@ -100,17 +100,10 @@ class TubePlot(object):
             self.scalar_color_name = scalar_color_name
         # Whether to log colour scale (boolean)
         self.log_color = log_color
-        
+
         # Create cylinders if they have not been provided
         if self.cylinders is None and self.cylinders_combined is None:
             self.create_plot_cylinders()
-     
-        # Create plot window
-        self.create_plot_window()
-        if self.headless:
-            print('Headless mode! Cannot render image')
-            return
-            
         # Set colours (only if raw cylinders have been provided)
         if self.cylinders_combined is None: 
             print('Preparing graph (adding color and combining)...')
@@ -121,8 +114,16 @@ class TubePlot(object):
                     radName = graph.get_radius_field()['name']
                     self.scalar_color_name = radName
             self.set_cylinder_colors()
+            
             # Combine cylinders
-            self.combine_cylinders()                
+            self.combine_cylinders()     
+            print("cylinders combined: ", self.cylinders_combined)
+
+        # Create plot window
+        self.create_plot_window() # Checks for headless mode
+        if self.headless:
+            print('Headless mode! Cannot render image')
+            return
 
         if self.block:
             self._show_plot()            
@@ -478,7 +479,7 @@ class TubePlot(object):
                                 self.cylinders[i0+j] = cyl
                                     
                                 excl = False
-                
+               
         self.cylinder_inds = np.where(self.cylinders)
 
     def combine_cylinders(self):
