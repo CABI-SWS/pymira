@@ -84,7 +84,11 @@ def extract_graph_from_seg(seg_path, output_path, scale=None):
         loops = graph.identify_loops()
         num_subgraphs = graph.identify_graphs()
         print(f"Number of loops: {len(loops)}")
+        if len(loops) > 0:
+            graph.remove_loops(prefer="long")
         print(f"Number of subgraphs: {len(num_subgraphs)}")
+        if len(num_subgraphs) > 1:
+            graph.remove_subsidiary_graphs()
 
     # Save the graph to a file
     graph.write(output_path+".am")
