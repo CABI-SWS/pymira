@@ -87,6 +87,7 @@ def extract_graph_from_seg(seg_path, output_path, scale=None):
         print(f"Number of subgraphs: {len(num_subgraphs)}")
 
     # Save the graph to a file
+    graph.write(output_path+".am")
     graph.export_mesh(ofile=output_path+".ply")
 
 
