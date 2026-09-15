@@ -1133,22 +1133,69 @@ class SpatialGraph(amiramesh.AmiraMesh):
                                   nelements=1,nentries=[0])
                 self.set_data(arr(v),name=k)
         
-    def export_mesh(self,vessel_type=None,radius_scale=1,min_radius=0,ofile='',resolution=10):
-        if vessel_type is not None:
-            vtypeEdge = self.point_scalars_to_edge_scalars(name='VesselType')
-            tp = self.plot_graph(show=False,block=False,min_radius=min_radius,edge_filter=vtypeEdge==vessel_type,cyl_res=resolution,radius_scale=radius_scale,radius_based_resolution=False)
-        else:
-            tp = self.plot_graph(show=False,block=False,min_radius=min_radius,cyl_res=resolution,radius_scale=radius_scale,radius_based_resolution=False)
+    def export_mesh(self,vessel_type=None,radius_scale=1,min_radius=0,ofile='',resolution=10,
+                    mesh_method='hard_union',voxel_size=None,max_voxels=32000000,
+                    union_mode='hard',blend_radius=None,tile_cells=64,
+                    max_tile_references=50000000,batch_tiles=64):
+        """Export the graph as a connected triangle mesh.
 
-        gmesh = tp.cylinders_combined
-        if tp.cylinders_combined is None:
-            print('No cylinders to export!')
-            return
+        The default hard-union method extracts the boundary of linearly
+        tapered polyball segments. It does not move or smooth supplied
+        centreline points or radii, and it creates no internal caps at bends or
+        branches. ``union_mode='smooth'`` is an explicit wall-blending option.
+        Use ``mesh_method='tiled_hard_union'`` for graph-wide streaming or
+        ``mesh_method='legacy_cylinders'`` for the former exporter.
+        """
+        edge_filter = None
+        if vessel_type is not None:
+            vtype_edge = np.asarray(
+                self.point_scalars_to_edge_scalars(name='VesselType'))
+            edge_filter = np.atleast_1d(vtype_edge==vessel_type)
+
+        if mesh_method in ('tiled_hard_union','sparse_union','tiled_union'):
+            from pymira.tiled_tube_mesh import tiled_hard_union_to_ply
+            return tiled_hard_union_to_ply(
+                self,ofile=ofile,edge_filter=edge_filter,
+                min_radius=min_radius,radius_scale=radius_scale,
+                resolution=resolution,voxel_size=voxel_size,
+                tile_cells=tile_cells,union_mode=union_mode,
+                blend_radius=blend_radius,
+                max_tile_references=max_tile_references,
+                batch_tiles=batch_tiles)
+        elif mesh_method in ('hard_union','implicit_union','union'):
+            from pymira.tube_mesh import hard_union_mesh, mesh_is_watertight
+            gmesh = hard_union_mesh(
+                self,edge_filter=edge_filter,min_radius=min_radius,
+                radius_scale=radius_scale,resolution=resolution,
+                voxel_size=voxel_size,max_voxels=max_voxels,
+                union_mode=union_mode,blend_radius=blend_radius)
+            if gmesh is not None and not mesh_is_watertight(gmesh):
+                raise RuntimeError('Implicit vessel mesh is not watertight')
+            tp = None
+        elif mesh_method in ('legacy','legacy_cylinders','cylinders'):
+            tp = self.plot_graph(
+                show=False,block=False,min_radius=min_radius,
+                edge_filter=edge_filter,cyl_res=resolution,
+                radius_scale=radius_scale,radius_based_resolution=False)
+            gmesh = tp.cylinders_combined
+        else:
+            raise ValueError(
+                "mesh_method must be 'hard_union' or 'legacy_cylinders'")
+
+        if gmesh is None:
+            print('No vessels to export!')
+            if tp is not None:
+                tp.destroy_window()
+            return None
         import open3d as o3d
         gmesh.compute_vertex_normals()
-        o3d.io.write_triangle_mesh(ofile,gmesh)
-        tp.destroy_window()
-        print(f'Mesh written to {ofile}')
+        if ofile:
+            if not o3d.io.write_triangle_mesh(ofile,gmesh):
+                raise IOError(f'Could not write mesh to {ofile}')
+            print(f'Mesh written to {ofile}')
+        if tp is not None:
+            tp.destroy_window()
+        return gmesh
         
     def change_field_name(self,original_name,new_name):
     
@@ -2576,48 +2623,55 @@ class SpatialGraph(amiramesh.AmiraMesh):
         return scalar_edges.squeeze()
  
     def point_scalars_to_segment_scalars(self,func=np.mean,name=None,domain=None):
+        """Map point scalars to segments in linear time for each field.
 
+        Each segment takes its starting point's value, as in the historical
+        implementation. ``func`` remains accepted for API compatibility but
+        is not applied; this method does not average neighbouring values.
+        With ``name=None``, fields retain ``get_scalars()`` order. Output is
+        float64 and squeezed, including scalar output for a single segment.
+
+        Domain selection keeps only consecutive points on the same edge with
+        both endpoints inside the inclusive bounds, matching ``get_segments``.
+        No offsets persist across calls, so topology edits cannot stale them.
+        """
         scalars = self.get_scalars()
         if name is not None:
-            scalars = [x for x in scalars if x['name']==name]
-            if len(scalars)==0:
+            scalars = [field for field in scalars if field['name']==name]
+            if not scalars:
                 return None
-    
-        verts = self.get_data('VertexCoordinates')
-        conns = self.get_data('EdgeConnectivity')
-        npoints = self.get_data('NumEdgePoints')
-        nsegpoints = npoints - 1
-        points = self.get_data('EdgePointCoordinates')
-        
-        nsc = len(scalars)
-        nseg = self.nedgepoint - self.nedge
-        scalar_segs = np.zeros([nsc,nseg])
-        
-        ins = None
-        if domain is not None:
-            segments = self.get_segments(domain=domain)
-            ins = (np.all(segments[:,0]>=domain[:,0],axis=1)) & (np.all(segments[:,0]<=domain[:,1],axis=1)) & \
-                  (np.all(segments[:,1]>=domain[:,0],axis=1)) & (np.all(segments[:,1]<=domain[:,1],axis=1))
-    
-        for i,conn in enumerate(conns):
-            npts = int(npoints[i])
-            x0 = int(np.sum(npoints[0:i]))
-            x1 = x0+npts
-            s0 = int(np.sum(nsegpoints[0:i]))
-            s1 = s0+int(nsegpoints[i])
 
-            for j,scalar in enumerate(scalars):
-                    
-                data = scalar['data']
-                if data is not None:
-                    if npts>2:
-                        scalar_segs[j,s0:s1] = data[x0:x1-1]
-                    else:
-                        scalar_segs[j,s0] = data[x0]
-        if ins is None:
-            return scalar_segs.squeeze()
-        else:
-            return scalar_segs[ins].squeeze()
+        counts = np.asarray(self.get_data('NumEdgePoints'),dtype=np.int64).reshape(-1)
+        if counts.size!=self.nedge or np.any(counts<2):
+            raise ValueError('Each graph edge must have at least two edge points')
+        stops = np.cumsum(counts)
+        total = int(stops[-1]) if stops.size else 0
+        if total!=self.nedgepoint:
+            raise ValueError('NumEdgePoints does not match the graph point count')
+
+        # Exclude every edge's last point: it starts no segment. This replaces
+        # repeated prefix sums inside an edge loop (quadratic in edge count).
+        keep = np.ones(total,dtype=bool)
+        keep[stops-1] = False
+        if domain is not None:
+            points = np.asarray(self.get_data('EdgePointCoordinates'))
+            bounds = np.asarray(domain,dtype=float)
+            if points.ndim!=2 or points.shape[0]!=total:
+                raise ValueError('EdgePointCoordinates does not match the graph point count')
+            if bounds.shape!=(points.shape[1],2) or np.any(bounds[:,0]>bounds[:,1]):
+                raise ValueError('domain must contain ordered bounds for each coordinate axis')
+            inside = np.all(points>=bounds[:,0],axis=1) & np.all(points<=bounds[:,1],axis=1)
+            keep[:-1] &= inside[:-1] & inside[1:]
+
+        scalar_segs = np.zeros((len(scalars),int(np.count_nonzero(keep))),dtype=float)
+        for index,field in enumerate(scalars):
+            if field['data'] is None:
+                continue
+            values = np.asarray(field['data'])
+            if values.ndim!=1 or values.size!=total:
+                raise ValueError(f"Point scalar {field['name']!r} does not match the graph point count")
+            scalar_segs[index] = values[keep]
+        return scalar_segs.squeeze()
  
     def plot_radius(self,*args,**kwargs):
         _ = self.plot_histogram(self.get_radius_field_name(),*args,**kwargs)
@@ -3695,58 +3749,40 @@ class Editor(object):
            
         return new_edge0.copy(), new_edge1.copy(), new_node_index,new_conn,nodeCoords,edgeConn,nedgepoints,edgeCoords,scalars
 
-    def _del_nodes(self,nodes_to_delete,nodeCoords,edgeConn,nedgepoints,edgeCoords,scalars=[]):
-    
+    def _del_nodes(self,nodes_to_delete,nodeCoords,edgeConn,nedgepoints,edgeCoords,scalars=None):
+        """Delete nodes with bulk masks and one old-to-new node lookup.
+
+        Work scales with nodes, edges and edge points, rather than scanning
+        every edge for each retained node. Retained ordering is unchanged.
+        """
         nnode = len(nodeCoords)
-        nedge = len(edgeConn)
-        nedgepoint = len(edgeCoords)
-        
-        nodes_to_keep = [x for x in range(nnode) if x not in nodes_to_delete]
-        nodeCoords_ed = np.asarray([nodeCoords[x] for x in nodes_to_keep])
-        
-        # Find connected edges
-        keepEdge = np.in1d(edgeConn, nodes_to_keep).reshape(edgeConn.shape)
-        keepEdge = np.asarray([all(x) for x in keepEdge])
-        edges_to_delete = np.where(keepEdge==False)[0]
-        edges_to_keep = np.where(keepEdge==True)[0]
-        edgeConn_ed = np.asarray([edgeConn[x] for x in edges_to_keep])
+        node_keep = ~np.isin(np.arange(nnode), nodes_to_delete)
+        node_indices = np.flatnonzero(node_keep)
+        nodeCoords_ed = nodeCoords[node_keep]
 
-        # Offset edge indices to 0
-        unqNodeIndices = nodes_to_keep
-        nunq = len(unqNodeIndices)
-        newInds = np.arange(nunq)            
-        edgeConn_ed_ref = np.zeros(edgeConn_ed.shape,dtype='int') - 1
-        edgeConn_was = np.zeros(edgeConn_ed.shape,dtype='int') - 1
-        # Update edge indices
-        for i,u in enumerate(unqNodeIndices):
-            sInds = np.where(edgeConn_ed==u)
-            newIndex = newInds[i]
-            if len(sInds[0])>0:
-                edgeConn_ed_ref[sInds[0][:],sInds[1][:]] = newIndex #newInds[i]
-                edgeConn_was[sInds[0][:],sInds[1][:]] = u
-        edgeConn_ed = edgeConn_ed_ref
+        # A removed endpoint drops its edge. Reindex remaining endpoints in
+        # one indexed gather, preserving self-loops and parallel-edge order.
+        keepEdge = np.all(node_keep[edgeConn], axis=1)
+        edges_to_delete = np.flatnonzero(~keepEdge)
+        edges_to_keep = np.flatnonzero(keepEdge)
+        lookup = np.full(nnode, -1, dtype=int)
+        lookup[node_indices] = np.arange(node_indices.size, dtype=int)
+        edgeConn_ed = lookup[edgeConn[keepEdge]]
+        nedgepoints_ed = nedgepoints[keepEdge]
 
-        # Modify edgepoint number array
-        nedgepoints_ed = np.asarray([nedgepoints[x] for x in edges_to_keep])
+        # Expand the edge mask once, including variable-length polylines.
+        # This replaces repeated prefix sums for each removed edge.
+        keepEdgePoint = np.repeat(keepEdge, nedgepoints)
+        edgeCoords_ed = edgeCoords[keepEdgePoint]
+        if len(edgeCoords_ed) != len(edgeCoords) and scalars is not None:
+            for i, data in enumerate(scalars):
+                scalars[i] = data[keepEdgePoint]
 
-        # Mark which edgepoints to keep / delete
-        keepEdgePoint = np.zeros(nedgepoint,dtype='bool') + True
-        for edgeIndex in edges_to_delete:
-            npoints = nedgepoints[edgeIndex]
-            strt = np.sum(nedgepoints[0:edgeIndex])
-            fin = strt + npoints
-            keepEdgePoint[strt:fin] = False
-
-        # Modify edgepoint coordinates
-        edgeCoords_ed = edgeCoords[keepEdgePoint==True] #np.asarray([edgeCoords[x] for x in edgepoints_to_keep)
-        
-        #Check for any other scalar fields
-        if nedgepoint!=len(edgeCoords_ed):
-            for i,data in enumerate(scalars):
-                scalars[i] = data[keepEdgePoint==True]
-                
-        info = {'edges_deleted':edges_to_delete,'edges_kept':edges_to_keep,'points_kept':keepEdgePoint,'nodes_deleted':nodes_to_delete,'nodes_kept':nodes_to_keep}
-        
+        info = {
+            'edges_deleted': edges_to_delete, 'edges_kept': edges_to_keep,
+            'points_kept': keepEdgePoint, 'nodes_deleted': nodes_to_delete,
+            'nodes_kept': node_indices.tolist(),
+        }
         return nodeCoords_ed,edgeConn_ed,nedgepoints_ed,edgeCoords_ed,scalars,info
     
     def delete_nodes(self,graph,nodes_to_delete):
@@ -3793,7 +3829,7 @@ class Editor(object):
         graph.set_data(edgeCoords_ed,name='EdgePointCoordinates')
         
         #Check for any other scalar fields
-        if nedgepoint!=len(edgeCoords_ed):
+        if nedgepoint!=len(edgeCoords_ed) and scalars is not None:
             for i,data in enumerate(scalars):
                 graph.set_data(data,name=scalar_names[i])
             
@@ -4510,6 +4546,7 @@ class Editor(object):
                             if np.all(pts[:,2]==pts[0,2]):
                                 pcur[:,2] = pts[0,2]
                     except Exception as e:
+                        print(e)
                         breakpoint()
                     
                     pcur[0] = pts[0]
