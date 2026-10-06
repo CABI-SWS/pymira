@@ -1796,13 +1796,13 @@ class SpatialGraph(amiramesh.AmiraMesh):
             count = 0
             while True:
                 next_nodes = edgeconn[edges].flatten()
+                nodeStore.extend(next_nodes.flatten().tolist())
                 edges = self.get_edges_containing_node(next_nodes)
                 # Take out edges already in store
                 edges = edges[~np.in1d(edges,edgeStore)]
                 # If there are new edges, add them in, otherwise break
                 if len(edges)>0:
                     edgeStore.extend(edges.flatten().tolist())
-                    nodeStore.extend(next_nodes.flatten().tolist())
                     conn_order.extend([count]*next_nodes.shape[0])
                     count += 1
                 else:
@@ -2889,9 +2889,11 @@ class SpatialGraph(amiramesh.AmiraMesh):
                 
         if store_ranks==True:
             if 'Ranks' in self.fieldNames:
+                rank_field = self.fields[self.fieldNames.index('Ranks')]
+                rank_field['definition'] = 'EDGE'
                 self.set_data(ranks,name='Ranks')
             else:
-                f = self.add_field(name='Ranks',data=ranks,type='int',shape=[ranks.shape[0]])  
+                f = self.add_field(name='Ranks',definition='EDGE',data=ranks,type='int',shape=[ranks.shape[0]])
                 
         if return_paths==True:
             return loops, paths, edgepaths
@@ -5239,7 +5241,7 @@ class GVars(object):
     def add_edge(self,start_node_index,end_node_index,new_scalar_vals,points=None):
         new_conn = [start_node_index,end_node_index]
         nodes = self.nodecoords[new_conn]
-        if points is None or not np.all(points[0]-self.nodecoords[new_conn[0]]<1e-12) or not np.all(points[-1]-self.nodecoords[new_conn[1]]<1e-12):
+        if points is None or not np.allclose(points[0], self.nodecoords[new_conn[0]], atol=1e-12) or not np.allclose(points[-1], self.nodecoords[new_conn[1]], atol=1e-12):
             self.add_edgeconn(new_conn)
             self.add_edgepoints(self.nodecoords[new_conn],new_scalar_vals,edgeInd=self.edge_ptr-1)
         else:
