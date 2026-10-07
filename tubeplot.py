@@ -117,7 +117,7 @@ class TubePlot(object):
             
             # Combine cylinders
             self.combine_cylinders()     
-            print("cylinders combined: ", self.cylinders_combined)
+            #print("cylinders combined: ", self.cylinders_combined)
 
         # Create plot window
         self.create_plot_window() # Checks for headless mode
