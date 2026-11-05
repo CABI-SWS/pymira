@@ -9,4 +9,4 @@ if len(sys.argv) > 1:
     # Add your file-handling logic here
     graph = spatialgraph.SpatialGraph()
     graph.read(filename)
-    graph.plot()
+    graph.plot(gray=False)
