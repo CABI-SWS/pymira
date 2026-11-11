@@ -147,3 +147,12 @@ def test_annotation_survives_a_file_round_trip_and_the_migration_reports_margins
     back = spatialgraph.SpatialGraph()
     back.read(path)
     assert back.get_sources() == {'inlets': [0], 'outlets': [5]} and back.has_source_annotation()
+
+
+def test_no_reachability_warning_before_a_capillary_bed_exists():
+    g = av_graph()
+    vt = np.asarray(g.get_data('VesselType')).copy()
+    vt[vt == 2] = 1                                          # no capillary edges left: artery and vein trees are disjoint
+    g.set_data(vt, name='VesselType')
+    g.set_sources(inlets=[0], outlets=[5])
+    assert not [m for s, m in g.validate_sources() if 'not connected' in m]

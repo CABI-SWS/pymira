@@ -2043,7 +2043,9 @@ class SpatialGraph(amiramesh.AmiraMesh):
                     out.append(('error',f'{name} node {n} touches edges of VesselType {sorted(set(vt_edge[edges].tolist()))} (expected {vtype})'))
                 if deg[n]!=1:
                     out.append(('warning',f'{name} node {n} has {deg[n]} edges (a source is normally the free end of its root vessel)'))
-        if src['inlets'] and src['outlets']:
+        # artery and vein trees only meet through capillaries; before a capillary bed exists they are disconnected by construction
+        has_capillaries = vt_edge is not None and bool(np.any(vt_edge==2))
+        if src['inlets'] and src['outlets'] and has_capillaries:
             from scipy.sparse import coo_matrix
             from scipy.sparse.csgraph import connected_components
             m = coo_matrix((np.ones(len(conn)),(conn[:,0],conn[:,1])),shape=(self.nnode,self.nnode))
