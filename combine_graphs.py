@@ -70,6 +70,23 @@ def combine_graphs(graph1,graph2,common_only=False):
         #print('Combining {}'.format(fName))
         graphComb.set_data(data,name=fName)
 
+    # Fields only the first graph has were left with the first graph's length: pad them with zeros for the second graph's
+    # vertices / edges / points. The NodeRole field of a second graph that lacks it in the first is carried over the same way.
+    counts = {'VERTEX':nnode2,'EDGE':nconn2,'POINT':npoints2}
+    for fName in graph1.fieldNames:
+        if fName in req_fields or fName in fields:
+            continue
+        f1 = graph1.get_field(fName)
+        n2 = counts.get(str(f1.get('definition','')).upper())
+        if n2 is None or f1.get('data') is None:
+            continue
+        d1 = f1['data']
+        graphComb.set_data(np.concatenate([d1,np.zeros((n2,)+tuple(d1.shape[1:]),dtype=d1.dtype)]),name=fName)
+    if 'NodeRole' in graph2.fieldNames and 'NodeRole' not in graph1.fieldNames:
+        d2 = graph2.get_data('NodeRole')
+        graphComb.add_field(name='NodeRole',marker=graphComb.generate_next_marker(),definition='VERTEX',type='int',nelements=1,nentries=[0])
+        graphComb.set_data(np.concatenate([np.zeros(nnode1,dtype=d2.dtype),d2]),name='NodeRole')
+
     # Common only
     if common_only:
         cfields = graphComb.fields.copy()

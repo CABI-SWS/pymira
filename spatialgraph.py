@@ -19,6 +19,14 @@ from matplotlib import pyplot as plt
 import copy
 from itertools import combinations
 
+# Flow sources stored on the nodes (opt-in, see SpatialGraph.set_sources): the role travels with the node through deletions,
+# reindexing, combination and file round trips, unlike an index or the "widest free-end edge" heuristic of identify_inlet_outlet.
+NODE_ROLE_FIELD = 'NodeRole'
+ROLE_NONE, ROLE_INLET, ROLE_OUTLET = 0, 1, 2
+# node fields that a node created by splitting an edge must NOT inherit from the edge's start node
+NON_INHERITED_NODE_FIELDS = (NODE_ROLE_FIELD,)
+
+
 def update_array_index(vals,inds,keep):
     # Updates/offets indices for an array (vals) to exclude values in a flag array (keep)
     # inds: array indices for vals.
@@ -1959,7 +1967,138 @@ class SpatialGraph(amiramesh.AmiraMesh):
             node_count[np.in1d(all_nodes,unq)] = count
         return node_count
         
+    # ------------------------------------------------------------------------------------------------------------------
+    # Flow sources (artery inlets / vein outlets) stored on the nodes
+    # ------------------------------------------------------------------------------------------------------------------
+    def _node_role(self):
+        if NODE_ROLE_FIELD not in self.fieldNames:
+            return None
+        role = self.get_data(NODE_ROLE_FIELD)
+        if role is None or len(role)!=self.nnode:
+            return None
+        return arr(role).astype(int).reshape(-1)
+
+    def has_source_annotation(self):
+        """True if the nodes carry at least one inlet and one outlet role (NodeRole field)."""
+        r = self._node_role()
+        return r is not None and bool(np.any(r==ROLE_INLET)) and bool(np.any(r==ROLE_OUTLET))
+
+    def get_sources(self):
+        """{'inlets': [...], 'outlets': [...]} node indices from the NodeRole field (empty lists if there is none)."""
+        r = self._node_role()
+        if r is None:
+            return {'inlets':[],'outlets':[]}
+        return {'inlets':np.where(r==ROLE_INLET)[0].tolist(),'outlets':np.where(r==ROLE_OUTLET)[0].tolist()}
+
+    def set_sources(self,inlets=None,outlets=None,clear=True):
+        """Mark artery inlet / vein outlet nodes (indices or iterables of indices) in the NodeRole field, creating it if needed.
+
+        clear=True resets every other node to no role first (what a join of several trees under one source needs)."""
+        if NODE_ROLE_FIELD not in self.fieldNames:
+            self.add_field(name=NODE_ROLE_FIELD,marker=self.generate_next_marker(),definition='VERTEX',type='int',nelements=1,nentries=[0])
+            self.set_data(np.zeros(self.nnode,dtype=int),name=NODE_ROLE_FIELD)
+        role = arr(self.get_data(NODE_ROLE_FIELD)).astype(int).copy().reshape(-1)
+        if clear:
+            role[:] = ROLE_NONE
+        for nodes,value in ((inlets,ROLE_INLET),(outlets,ROLE_OUTLET)):
+            if nodes is None:
+                continue
+            nodes = np.atleast_1d(arr(nodes)).astype(int)
+            if nodes.size and (nodes.min()<0 or nodes.max()>=self.nnode):
+                raise ValueError('source node index out of range')
+            role[nodes] = value
+        self.set_data(role,name=NODE_ROLE_FIELD)
+        return self
+
+    def identify_sources(self):
+        """All flow sources: the NodeRole annotation if present, otherwise the single inlet / outlet of the heuristic."""
+        if self.has_source_annotation():
+            return self.get_sources()
+        a,v = self._identify_inlet_outlet_heuristic()
+        return {'inlets':[] if a is None else [int(a)],'outlets':[] if v is None else [int(v)]}
+
+    def validate_sources(self):
+        """Consistency of the NodeRole annotation: list of (severity, message), severity 'error' / 'warning' / 'info'."""
+        out = []
+        r = self._node_role()
+        if r is None:
+            return [('info','no NodeRole annotation (identify_inlet_outlet uses the radius heuristic)')]
+        src = self.get_sources()
+        if not src['inlets']:
+            out.append(('error','no arterial inlet (role 1)'))
+        if not src['outlets']:
+            out.append(('error','no venous outlet (role 2)'))
+        if not set(np.unique(r).tolist())<={ROLE_NONE,ROLE_INLET,ROLE_OUTLET}:
+            out.append(('warning',f'unknown role values {sorted(set(np.unique(r).tolist())-{0,1,2})}'))
+        conn = arr(self.get_data('EdgeConnectivity')).astype(int)
+        deg = np.bincount(conn.ravel(),minlength=self.nnode)
+        vt_edge = arr(self.point_scalars_to_edge_scalars(name='VesselType')).astype(int) if 'VesselType' in self.fieldNames else None
+        for nodes,vtype,name in ((src['inlets'],0,'inlet'),(src['outlets'],1,'outlet')):
+            for n in nodes:
+                edges = np.where((conn==n).any(axis=1))[0]
+                if edges.size==0:
+                    out.append(('error',f'{name} node {n} has no edges'))
+                    continue
+                if vt_edge is not None and np.any(vt_edge[edges]!=vtype):
+                    out.append(('error',f'{name} node {n} touches edges of VesselType {sorted(set(vt_edge[edges].tolist()))} (expected {vtype})'))
+                if deg[n]!=1:
+                    out.append(('warning',f'{name} node {n} has {deg[n]} edges (a source is normally the free end of its root vessel)'))
+        if src['inlets'] and src['outlets']:
+            from scipy.sparse import coo_matrix
+            from scipy.sparse.csgraph import connected_components
+            m = coo_matrix((np.ones(len(conn)),(conn[:,0],conn[:,1])),shape=(self.nnode,self.nnode))
+            _,lab = connected_components(m,directed=False)
+            inlet_components = set(lab[src['inlets']].tolist())
+            for n in src['outlets']:
+                if int(lab[n]) not in inlet_components:
+                    out.append(('warning',f'outlet node {n} is not connected to any inlet'))
+        try:
+            a,v = self._identify_inlet_outlet_heuristic()
+            if a is not None and int(a) not in src['inlets']:
+                out.append(('info',f'the radius heuristic would pick inlet {int(a)}, not an annotated inlet'))
+            if v is not None and int(v) not in src['outlets']:
+                out.append(('info',f'the radius heuristic would pick outlet {int(v)}, not an annotated outlet'))
+        except Exception:
+            pass
+        return out
+
+    def annotate_sources_from_heuristic(self,min_margin=2.0,overwrite=False):
+        """Write the NodeRole field from the radius heuristic (migration of graphs created without it).
+
+        Returns a report with the chosen nodes and the margin between the widest and the second widest free-end edge of each
+        vessel type; ``ambiguous`` is True if either margin is below ``min_margin`` (check those graphs by eye). An existing
+        annotation is kept unless ``overwrite``."""
+        if self.has_source_annotation() and not overwrite:
+            return {'changed':False,'reason':'already annotated'}
+        a,v = self._identify_inlet_outlet_heuristic()
+        conn = arr(self.get_data('EdgeConnectivity')).astype(int)
+        deg = np.bincount(conn.ravel(),minlength=self.nnode)
+        vt = arr(self.point_scalars_to_edge_scalars(name='VesselType')).astype(int)
+        rad = arr(self.point_scalars_to_edge_scalars(name=self.get_radius_field_name(),func=np.max),dtype=float)
+        margins = {}
+        for t,key in ((0,'artery'),(1,'vein')):
+            c = np.where((vt==t) & ((deg[conn[:,0]]==1) | (deg[conn[:,1]]==1)))[0]
+            r = np.sort(rad[c])[::-1]
+            margins[key] = float(r[0]/r[1]) if len(r)>1 and r[1]>0 else float('inf')
+        self.set_sources(inlets=None if a is None else [int(a)],outlets=None if v is None else [int(v)])
+        return {'changed':True,'inlet':None if a is None else int(a),'outlet':None if v is None else int(v),
+                'margins':margins,'ambiguous':any(m<min_margin for m in margins.values())}
+
     def identify_inlet_outlet(self,tmpfile=None,restore=False,ignore=None):
+        """Artery inlet and vein outlet node indices.
+
+        If the nodes carry a NodeRole annotation (set_sources) it is used - it does not depend on vessel sizes or on the
+        topology around the root. Otherwise the original heuristic applies (the widest artery / vein edge with a free end);
+        see _identify_inlet_outlet_heuristic. ``ignore``: node indices that must not be returned."""
+        if self.has_source_annotation():
+            src = self.get_sources()
+            skip = set() if ignore is None else set(int(i) for i in np.atleast_1d(ignore))
+            inlets = [n for n in src['inlets'] if n not in skip]
+            outlets = [n for n in src['outlets'] if n not in skip]
+            return (inlets[0] if inlets else None),(outlets[0] if outlets else None)
+        return self._identify_inlet_outlet_heuristic(tmpfile=tmpfile,restore=restore,ignore=ignore)
+
+    def _identify_inlet_outlet_heuristic(self,tmpfile=None,restore=False,ignore=None):
 
         nodecoords = self.get_data('VertexCoordinates')
         edgeconn = self.get_data('EdgeConnectivity')
@@ -5209,7 +5348,7 @@ class GVars(object):
         
         if len(new_scalar_vals)==0:
             node_scalar_names = [x['name'] for x in  self.node_scalars]
-            new_scalar_vals = [x['data'][0] for x in self.node_scalars]   
+            new_scalar_vals = [0 if x['name'] in NON_INHERITED_NODE_FIELDS else x['data'][0] for x in self.node_scalars]   
             if 'NodeLabel' in node_scalar_names:
                 new_scalar_vals[node_scalar_names.index('NodeLabel')] = self.graph.unique_node_label()                      
         
@@ -5640,6 +5779,8 @@ class GVars(object):
         for i,buf in enumerate(self.node_scalar_values):
             if self.node_scalars[i]['name']=='NodeLabel':
                 buf[nn] = self.graph.unique_node_label()
+            elif self.node_scalars[i]['name'] in NON_INHERITED_NODE_FIELDS:
+                buf[nn] = 0
             else:
                 buf[nn] = buf[start_node]
         self.nodecoords_allocated[:] = False
@@ -5795,6 +5936,9 @@ class GVars(object):
         nodeCoords = np.concatenate([nodeCoords,[new_node_coords]])
         
         new_node_scalars = [x[start_node] for x in node_scalars]
+        for i,nm in enumerate(node_scalar_names):
+            if nm in NON_INHERITED_NODE_FIELDS:
+                new_node_scalars[i] = 0
         
         # Sort out scalars
         for i,data in enumerate(node_scalars):
