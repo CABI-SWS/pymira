@@ -5526,10 +5526,132 @@ class GVars(object):
         else:
             breakpoint()
 
+    def _prefix_counts(self):
+        """(nnode, nedge, nedgepoint) when each allocation mask is a contiguous prefix (the normal state), else None."""
+        counts = []
+        for mask in (self.nodecoords_allocated,self.edgeconn_allocated,self.edgepoints_allocated):
+            n = int(np.count_nonzero(mask))
+            if not mask[:n].all():
+                return None
+            counts.append(n)
+        return counts
+
     def insert_node_in_edge(self,edge_index,edgepoint_index,new_scalar_values=None,node_location_only=False,fr=0.5,newpoint=None):
-    
+        """Split an edge by a new node. Same results and same buffer state as _insert_node_in_edge_reference, but the
+        arrays are edited in place (one move of the edge-point tail) instead of being copied out of every storage
+        buffer, rebuilt and copied back several times per call, which cost O(network) many times over."""
+        counts = self._prefix_counts()
+        if counts is None:
+            return self._insert_node_in_edge_reference(edge_index,edgepoint_index,new_scalar_values,node_location_only,fr,newpoint)
+        nn,ne,npnt = counts
+        edge_index = int(edge_index)
+        x0 = int(np.sum(self.nedgepoints[:edge_index]))
+        n_e = int(self.nedgepoints[edge_index])
+        x1 = x0 + n_e
+        edge = self.edgepoints[x0:x1].copy()
+        start_node = self.edgeconn[edge_index,0]
+        end_node = self.edgeconn[edge_index,1]
+
+        # Locate the insertion point (as in the reference implementation)
+        dists = np.linalg.norm(edge-edge[0],axis=1)
+        if dists[-1]==0.:
+            if node_location_only:
+                return None
+            return None, None, None, None
+        if newpoint is None:
+            t = np.cumsum(dists)
+            new_loc = t[-1]*fr
+            s0 = np.where(t<=new_loc)[0][-1]
+            s1 = np.where(t>=new_loc)[0][0]
+            s0fr = dists[s0]/t[-1]
+            sfr = fr - s0fr
+            newpoint = edge[s0] + (edge[s1] - edge[s0])*sfr
+        else:
+            A,B = edge[:-1],edge[1:]
+            AB = B - A
+            AP = newpoint - A
+            ab2 = np.einsum('ij,ij->i', AB, AB)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                tt = np.einsum('ij,ij->i', AP, AB) / ab2
+            tt = np.clip(np.nan_to_num(tt, nan=0.0), 0.0, 1.0)
+            Q = A + tt[:, None] * AB
+            diff = Q - newpoint
+            d2 = np.einsum('ij,ij->i', diff, diff)
+            i = int(np.argmin(d2))
+            s0,s1 = i,i+1
+        if node_location_only:
+            return newpoint
+
+        new_edge = np.vstack([edge[:s0+1],newpoint,edge[s1:]])
+        xp = int(s0 + 1)
+        npoints = n_e + 1
+        if not (0 < xp < npoints-1):
+            # the reference implementation reports these degenerate cases itself
+            return self._insert_node_in_edge_reference(edge_index,edgepoint_index,new_scalar_values,node_location_only,fr,newpoint)
+        new_edge0 = new_edge[:xp+1]
+        new_edge1 = new_edge[xp:]
+        new_node_coords = new_edge[xp]
+        n1 = new_edge1.shape[0]
+        n_total = npnt + 2
+
+        # --- storage capacity, with the same preallocation steps as set_edge / set_nodecoords / set_edgeconn / set_edgepoints
+        if self.edgepoints.shape[0]-self.edgepnt_ptr<=1:
+            self.preallocate_edgepoints(self.n_all,set_pointer_to_start=False)
+        if self.edgepoints.shape[0] < n_total:
+            self.preallocate_edgepoints(n_total-self.edgepoints.shape[0],set_pointer_to_start=False)
+        if self.nodecoords.shape[0] < nn+1:
+            self.preallocate_nodes(nn+1-self.nodecoords.shape[0],set_pointer_to_start=False)
+        if self.edgeconn.shape[0] < ne+1:
+            self.preallocate_edges(ne+1,set_pointer_to_start=False)
+
+        # --- edge points: the edge keeps its slot (first part), the tail moves up, the second part is appended
+        a = x0 + xp + 1
+        tail = self.edgepoints[x1:npnt].copy()
+        self.edgepoints[x0:a] = new_edge0
+        self.edgepoints[a:a+tail.shape[0]] = tail
+        self.edgepoints[n_total-n1:n_total] = new_edge1
+        for i,buf in enumerate(self.scalar_values):
+            old = buf[x0:x1].copy()
+            tail = buf[x1:npnt].copy()
+            if self.scalars[i]['name']=='EdgeLabel':
+                second = np.repeat(self.graph.unique_edge_label(),n1)
+            else:
+                second = np.concatenate([old[s0:s0+1],old[s1:]])
+            buf[x0:a] = np.concatenate([old[:s0+1],old[s0:s0+1]])
+            buf[a:a+tail.shape[0]] = tail
+            buf[n_total-n1:n_total] = second
+        self.edgepoints_allocated[:] = False
+        self.edgepoints_allocated[:n_total] = True
+        self.edgepnt_ptr = n_total
+
+        # --- the new node, with the scalar values of the start node
+        new_node_index = nn
+        self.nodecoords[nn] = new_node_coords
+        for i,buf in enumerate(self.node_scalar_values):
+            if self.node_scalars[i]['name']=='NodeLabel':
+                buf[nn] = self.graph.unique_node_label()
+            else:
+                buf[nn] = buf[start_node]
+        self.nodecoords_allocated[:] = False
+        self.nodecoords_allocated[:nn+1] = True
+        self.node_ptr = nn + 1
+
+        # --- connectivity: the original edge now ends at the new node, a new edge runs from it to the old end
+        new_conn = np.asarray([new_node_index,end_node])
+        self.edgeconn[edge_index] = [start_node,new_node_index]
+        self.edgeconn[ne] = new_conn
+        self.nedgepoints[edge_index] = new_edge0.shape[0]
+        self.nedgepoints[ne] = n1
+        self.edgeconn_allocated[:] = False
+        self.edgeconn_allocated[:ne+1] = True
+        self.edge_ptr = ne + 1
+
+        return new_edge0.copy(), new_edge1.copy(), new_node_index, new_conn
+
+    def _insert_node_in_edge_reference(self,edge_index,edgepoint_index,new_scalar_values=None,node_location_only=False,fr=0.5,newpoint=None):
+
         # Returns the new node index and the two new edges (if any are made)
-        
+
         nodeCoords = self.nodecoords[self.nodecoords_allocated]
         edgeConn = self.edgeconn[self.edgeconn_allocated]
         nedgepoints = self.nedgepoints[self.edgeconn_allocated]
@@ -5702,17 +5824,28 @@ class GVars(object):
         node_scalars = self.graph.get_node_scalars()
         node_scalar_names = [x['name'] for x in node_scalars]
         
-        nodecoords = self.nodecoords[self.nodecoords_allocated]
-        edgeconn = self.edgeconn[self.edgeconn_allocated]
-        nedgepoints = self.nedgepoints[self.edgeconn_allocated]
-        edgepoints = self.edgepoints[self.edgepoints_allocated]
-        scalar_values = [[] for i in range(len(self.scalar_values))]
-        for i,sc in enumerate(self.scalar_values):
-            scalar_values[i] = self.scalar_values[i][self.edgepoints_allocated]
-        node_scalar_values = [[] for i in range(len(self.node_scalar_values))]
-        for i,sc in enumerate(self.node_scalar_values):
-            node_scalar_values[i] = self.node_scalar_values[i][self.nodecoords_allocated]
-        
+        counts = self._prefix_counts()
+        if counts is not None:
+            # contiguous allocation (normal): slice + copy rather than boolean-mask gathers (same values, several times faster)
+            nn,ne,npnt = counts
+            nodecoords = self.nodecoords[:nn]
+            edgeconn = self.edgeconn[:ne]
+            nedgepoints = self.nedgepoints[:ne]
+            edgepoints = self.edgepoints[:npnt]
+            scalar_values = [x[:npnt].copy() for x in self.scalar_values]
+            node_scalar_values = [x[:nn].copy() for x in self.node_scalar_values]
+        else:
+            nodecoords = self.nodecoords[self.nodecoords_allocated]
+            edgeconn = self.edgeconn[self.edgeconn_allocated]
+            nedgepoints = self.nedgepoints[self.edgeconn_allocated]
+            edgepoints = self.edgepoints[self.edgepoints_allocated]
+            scalar_values = [[] for i in range(len(self.scalar_values))]
+            for i,sc in enumerate(self.scalar_values):
+                scalar_values[i] = self.scalar_values[i][self.edgepoints_allocated]
+            node_scalar_values = [[] for i in range(len(self.node_scalar_values))]
+            for i,sc in enumerate(self.node_scalar_values):
+                node_scalar_values[i] = self.node_scalar_values[i][self.nodecoords_allocated]
+
         for i,field in enumerate(fields):
             if field['name']=='VertexCoordinates':
                 self.graph.set_data(nodecoords.astype('float32'),name=fieldNames[i])
