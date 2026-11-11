@@ -522,7 +522,14 @@ class AmiraMesh(object):
                 f.write('{}\n'.format(d['marker']))
                 data = d['data']
                 name = d['name']
-                if data.ndim==1:
+                if data.ndim==1 and data.dtype!=object and os.linesep=='\n':
+                    # one tofile call for the whole column: identical text to one call per element (each ~10 us, 2M calls =
+                    # 20 s per growth run). tofile bypasses the text layer's newline translation, so this is only used where
+                    # the line separator is a plain newline (not on Windows, which keeps the per-element path)
+                    if data.shape[0]>0:
+                        data.tofile(f, sep="\n", format="%s")
+                        f.write('\n')
+                elif data.ndim==1:
                     for j in range(data.shape[0]):
                         if data[j] is None:
                             breakpoint()

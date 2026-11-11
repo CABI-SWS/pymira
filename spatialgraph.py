@@ -4789,8 +4789,18 @@ class Editor(object):
         nodes = graph.get_data('VertexCoordinates')
         edgepoints = graph.get_data('EdgePointCoordinates')
         
-        for i,c1 in enumerate(nodes):
-            sind = np.where((nodes[:,0]==c1[0]) & (nodes[:,1]==c1[1]) & (nodes[:,2]==c1[2]))
+        # Groups of nodes with identical coordinates, found with one sort instead of comparing every node with every
+        # node (O(N^2)). The original loop met each group at its first member and displaced its members in ascending
+        # index order; groups are visited in the same order here, so the random draws are identical.
+        finite = np.all(np.isfinite(nodes),axis=1)
+        _,inverse,counts = np.unique(nodes[finite],axis=0,return_inverse=True,return_counts=True)
+        inverse = np.asarray(inverse).reshape(-1)
+        finite_index = np.where(finite)[0]
+        groups = [finite_index[inverse==g] for g in np.where(counts>1)[0]]
+        groups.sort(key=lambda m: m[0])
+        
+        for sind in groups:
+            sind = (sind,)
             if len(sind[0])>1:
                 #print(f'Degenerate nodes: {sind[0]}')
                 edges = graph.get_edges_containing_node(sind[0])
