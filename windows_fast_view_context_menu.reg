@@ -1,0 +1,11 @@
+Windows Registry Editor Version 5.00
+
+; Adds "Open with fast_view" to the right-click menu of .am files (current user only; the double-click default is unchanged).
+; Remove with:  reg delete "HKCU\Software\Classes\AMFile.PyMira\shell\fastview" /f
+
+[HKEY_CURRENT_USER\Software\Classes\AMFile.PyMira\shell\fastview]
+@="Open with fast_view"
+"Icon"="C:\\Users\\simon\\anaconda3\\envs\\vessel_growth\\python.exe"
+
+[HKEY_CURRENT_USER\Software\Classes\AMFile.PyMira\shell\fastview\command]
+@="\"C:\\Users\\simon\\anaconda3\\envs\\vessel_growth\\Lib\\site-packages\\pymira\\fast_view.bat\" \"%1\""

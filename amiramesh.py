@@ -74,13 +74,45 @@ class AmiraMesh(object):
         curField['shape'] = curShape
             
         # Grab data
-        fin = content[strt:].find('@')
-        if fin<0:
-            fin = len(content)-strt
+        fin = content.find('@',strt)  # search from strt without copying the rest of the file
+        fin = len(content)-strt if fin<0 else fin-strt
         curData = content[strt:strt+fin] # -1
         
         # Data type
         if 'ascii' in self.fileType.lower():
+            # Fast path: parse all numbers in one vectorised call (about 20x faster than splitting every line in Python).
+            # Falls through to the line-by-line parser for comment lines, non-numeric entries or a size mismatch.
+            if '#' not in curData:
+                try:
+                    nexpected = int(np.prod(curShape))
+                    flat = None
+                    try:
+                        import pandas as pd, io
+                        raw = curData.encode('ascii')
+                        for sep in (' ',r'\s+'):
+                            df = pd.read_csv(io.BytesIO(raw),sep=sep,header=None,dtype=np.float64,engine='c')
+                            flat = df.to_numpy().reshape(-1)
+                            if flat.size==nexpected and (not np.isnan(flat).any() or b'nan' in raw.lower()):
+                                break
+                            flat = None
+                    except Exception:
+                        flat = None
+                    if flat is None:
+                        flat = np.fromstring(curData,dtype='d',sep=' ')
+                    if flat.size==nexpected and nexpected>0:
+                        fdtype = {'float':np.dtype('f'),'double':np.dtype('d'),'int':np.dtype('i'),'long':np.dtype('i'),
+                                  'byte':np.dtype('byte'),'bool':np.dtype('bool')}.get(curField['type'],np.dtype('f'))
+                        arr = flat.reshape(curShape)
+                        if fdtype==np.dtype('bool'):
+                            if arr.flat[0] in (0.,1.):
+                                arr = arr.astype('float')
+                            else:
+                                arr = None
+                        if arr is not None:
+                            curField['data'] = arr.astype(fdtype)
+                            return True
+                except Exception:
+                    pass
             #curData = curData.splitlines()
             curData = [s.strip().split(' ') for s in curData.splitlines() if s]
             comment_line = []
@@ -179,7 +211,10 @@ class AmiraMesh(object):
 #    def add_field(self,**kwargs):
 #        self.fields.append(self._field_generator(**kwargs))
         
-    def read(self,filename,quiet=False):
+    def read(self,filename,quiet=False,only=None):
+        """Read an Amira mesh. `only` (optional iterable of field names) restricts parsing to those fields."""
+        if only is not None:
+            only = set(only)
         
         self.fileRead = False
         self.filename = filename
@@ -406,16 +441,32 @@ class AmiraMesh(object):
                     break
 
         self.fieldRange = []
+        # One pass over the data to locate the first occurrence of every '@N' marker line (a find() per field rescans the whole file)
+        first_marker = {}
+        missing_markers = set()
+        for mm in re.finditer(r'@(\d+)\n',self.data):
+            first_marker.setdefault('@'+mm.group(1),mm.start())
         for curField in self.fields:
             mrk = curField['marker']
-            mInd = self.data.find(mrk+'\n')
+            mInd = first_marker.get(mrk,-1)
+            if mInd==-1:
+                mInd = self.data.find(mrk+'\n')
             if mInd==-1:
                 mInd = self.data.find(mrk)
+            if mInd==-1:
+                # Marker absent: the file is truncated (e.g. still being copied). Skip the field rather than reading garbage.
+                missing_markers.add(mrk)
+                mInd = len(self.data)-len(mrk)
             mInd += len(mrk)
             self.fieldRange.append(mInd)
         self.fieldRange.append(len(self.data))
 
         for i,curField in enumerate(self.fields):
+            if only is not None and curField['name'] not in only:
+                continue  # field not requested: leave its data as None (dropped below)
+            if curField['marker'] in missing_markers:
+                print(f"Warning: data for field {curField['name']} ({curField['marker']}) not found - file truncated or incomplete?")
+                continue
             self._read_file_data(self.data,self.fieldRange[i],self.fieldRange[i+1],curField['marker'],quiet=quiet)
             
         # Remove any null data fields
